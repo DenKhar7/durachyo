@@ -1,0 +1,40 @@
+# секреты
+.env
+.env.*
+*.pem
+*.key
+
+# данные бота (переписка чата)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+backup*.db
+result.json
+ChatExport*/
+
+# python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# редакторы, ОС, инструменты
+.empryo/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
