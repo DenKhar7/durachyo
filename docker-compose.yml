@@ -1,5 +1,6 @@
 services:
   bot:
+    image: ghcr.io/denkhar7/durachyo:${TAG:-latest}
     build: .
     container_name: sglypa
     restart: unless-stopped

@@ -51,38 +51,128 @@ Foreign chat -1001234567890 ('Наш чат'): leaving
 
 ## 4. Деплой на VPS (OVH, Ubuntu/Debian)
 
-Один раз, подготовить сервер:
+Схема: `git push` → GitHub Actions прогоняет тесты → собирает образ → кладёт в приватный GHCR → по SSH дёргает VPS → VPS делает `docker pull` нужного коммита и перезапускает бота.
+
+На VPS **нет исходников и нет доступа к репо**. Ключ CI на сервере умеет ровно одно: запустить `deploy.sh` с SHA коммита. Ни шелла, ни проброса портов.
+
+| Что утекло | Что может атакующий |
+|---|---|
+| ключ CI из GitHub Secrets | передеплоить уже собранный тобой образ |
+| токен GHCR с VPS | скачать образ бота (код и так на VPS) |
+| пользователь `sglypa` на VPS | через docker — весь сервер, включая другие проекты; репо и GitHub не тронуть |
+
+### 4.1. Сервер (один раз)
+
+На VPS живут и другие проекты, поэтому здесь **ничего не ломаем глобально**: каждая команда сначала проверяет состояние. Боту входящие порты не нужны (long polling) — фаервол и SSH-настройки ему не требуются, это общая гигиена сервера.
+
+**Docker** — ставить, только если его ещё нет:
 
 ```bash
-# вход только по ключу
-sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/; s/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sudo systemctl restart ssh
-
-# фаервол: боту входящие порты не нужны (long polling)
-sudo apt update && sudo apt install -y ufw fail2ban unattended-upgrades
-sudo ufw default deny incoming && sudo ufw allow OpenSSH && sudo ufw enable
-
-# docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER   # перелогиниться
+docker --version || curl -fsSL https://get.docker.com | sh
+docker compose version     # нужен Compose v2 (плагин), не старый docker-compose
 ```
 
-Запуск:
+**Пользователь проекта** — отдельный под каждый проект, чтобы не трогать чужие ключи и папки:
 
 ```bash
-git clone <repo> sglypa && cd sglypa
-cp example.env .env && nano .env
-chmod 600 .env
-docker compose up -d --build
-docker compose logs -f
+id sglypa 2>/dev/null || sudo adduser --disabled-password --gecos "" sglypa
+sudo usermod -aG docker sglypa
+sudo install -d -o sglypa -g sglypa -m 700 /opt/sglypa
 ```
 
-Обновление: `git pull && docker compose up -d --build`.
+Членство в группе `docker` фактически равно root на всём сервере. Поэтому ключ CI жёстко ограничен `deploy.sh` (шаг 4.4) — по нему нельзя получить шелл.
 
-БД живёт в docker volume `sglypa-data` и попадает в ежедневный бэкап OVH. Ручная копия:
+**Гигиена сервера (проверить, не применять вслепую):**
 
 ```bash
-docker compose cp bot:/app/data/sglypa.db ./backup.db
+# SSH: должно быть "passwordauthentication no" и "permitrootlogin no" (или prohibit-password)
+sudo sshd -T | grep -Ei '^(passwordauthentication|permitrootlogin)'
+
+# фаервол: посмотреть, что уже открыто для других сервисов
+sudo ufw status verbose 2>/dev/null || sudo iptables -S | head -50
+
+# автообновления безопасности и защита от перебора SSH
+dpkg -l unattended-upgrades fail2ban 2>/dev/null | grep ^ii
+```
+
+Если что-то из этого не настроено — настраивай отдельно и аккуратно:
+- **SSH-пароли**: сначала убедись, что заходишь по ключу (`ssh -o PasswordAuthentication=no user@IP` в **новом** окне), и только потом ставь `PasswordAuthentication no` в `/etc/ssh/sshd_config` → `sudo systemctl reload ssh`. Текущую сессию не закрывай, пока не проверишь вход.
+- **ufw**: если он выключен, а на сервере крутятся сайты/сервисы, сначала разреши их порты (`sudo ufw allow OpenSSH`, `sudo ufw allow 80,443/tcp` и т.д. по `sudo ss -tlnp`), и только потом `sudo ufw enable`. Учти: Docker публикует порты контейнеров в обход ufw.
+- **fail2ban / unattended-upgrades**: `sudo apt install -y fail2ban unattended-upgrades` — безопасно для других сервисов.
+
+### 4.2. Файлы на сервер
+
+С ПК (из папки проекта):
+
+```cmd
+scp docker-compose.yml deploy\deploy.sh example.env user@VPS:/tmp/
+```
+
+На VPS:
+
+```bash
+sudo install -o root -g root -m 755 /tmp/deploy.sh /opt/sglypa/deploy.sh
+sudo install -o sglypa -g sglypa -m 644 /tmp/docker-compose.yml /opt/sglypa/
+sudo install -o sglypa -g sglypa -m 600 /tmp/example.env /opt/sglypa/.env
+rm /tmp/deploy.sh /tmp/docker-compose.yml /tmp/example.env
+sudo -u sglypa nano /opt/sglypa/.env      # вписать BOT_TOKEN и остальное
+```
+
+`deploy.sh` принадлежит root — пользователь `sglypa` не может его подменить.
+
+### 4.3. Доступ VPS к образам (только чтение)
+
+GitHub → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate. Галочка только `read:packages`, срок — год. (GHCR пока не поддерживает fine-grained токены.)
+
+```bash
+sudo -iu sglypa docker login ghcr.io -u DenKhar7    # пароль = этот токен
+```
+
+### 4.4. Ключ для CI
+
+На ПК:
+
+```cmd
+ssh-keygen -t ed25519 -f %USERPROFILE%\.ssh\durachyo_ci -N "" -C "gha-deploy"
+type %USERPROFILE%\.ssh\durachyo_ci.pub
+```
+
+На VPS — разрешить этому ключу только `deploy.sh`:
+
+```bash
+sudo -u sglypa mkdir -p -m 700 /home/sglypa/.ssh
+echo 'restrict,command="/opt/sglypa/deploy.sh" ssh-ed25519 AAAA...ВСТАВИТЬ... gha-deploy' \
+  | sudo -u sglypa tee -a /home/sglypa/.ssh/authorized_keys
+sudo chmod 600 /home/sglypa/.ssh/authorized_keys
+```
+
+Секреты в репо (с ПК):
+
+```cmd
+gh secret set DEPLOY_SSH_KEY < %USERPROFILE%\.ssh\durachyo_ci
+gh secret set DEPLOY_HOST -b "IP_VPS"
+ssh-keyscan -t ed25519 IP_VPS > known_hosts.tmp && gh secret set DEPLOY_KNOWN_HOSTS < known_hosts.tmp && del known_hosts.tmp
+del %USERPROFILE%\.ssh\durachyo_ci
+```
+
+Приватный ключ CI после загрузки в GitHub удаляется с ПК — он нужен только Actions. Если SSH не на 22 порту: `gh secret set DEPLOY_PORT -b "2222"`.
+
+### 4.5. Деплой
+
+Просто `git push`. Ход смотреть: `gh run watch`. Логи бота на VPS:
+
+```bash
+sudo -iu sglypa sh -c 'cd /opt/sglypa && docker compose logs -f'
+```
+
+Текущая версия — в `/opt/sglypa/.deployed`. Откат: Actions → нужный старый запуск → Re-run jobs.
+
+### Бэкап
+
+БД живёт в docker volume и попадает в ежедневный бэкап OVH. Ручная копия:
+
+```bash
+sudo -iu sglypa sh -c 'cd /opt/sglypa && docker compose cp bot:/app/data/sglypa.db ./backup.db'
 ```
 
 ## Безопасность
