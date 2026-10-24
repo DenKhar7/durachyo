@@ -13,7 +13,7 @@
 | `/sglyp слово` | бред, начинающийся со слова |
 | `/quote [@user]` | достать старую фразу |
 | `/mock` (реплаем) | пОвТоРиТь С кРиВлЯнИеМ |
-| `/insult [@user]` | оскорбить (без аргумента — случайного) |
+| `/insult [@user]` | оскорбить (без аргумента - случайного) |
 | `/all` | пингануть всех, кого бот видел (кулдаун 5 мин) |
 | `/stats` | сколько помнит |
 | `/forgetme` | стереть свои фразы |
@@ -59,20 +59,20 @@ Foreign chat -1001234567890 ('Наш чат'): leaving
 |---|---|
 | ключ CI из GitHub Secrets | передеплоить уже собранный тобой образ |
 | токен GHCR с VPS | скачать образ бота (код и так на VPS) |
-| пользователь `sglypa` на VPS | через docker — весь сервер, включая другие проекты; репо и GitHub не тронуть |
+| пользователь `sglypa` на VPS | через docker - весь сервер, включая другие проекты; репо и GitHub не тронуть |
 
 ### 4.1. Сервер (один раз)
 
-На VPS живут и другие проекты, поэтому здесь **ничего не ломаем глобально**: каждая команда сначала проверяет состояние. Боту входящие порты не нужны (long polling) — фаервол и SSH-настройки ему не требуются, это общая гигиена сервера.
+На VPS живут и другие проекты, поэтому здесь **ничего не ломаем глобально**: каждая команда сначала проверяет состояние. Боту входящие порты не нужны (long polling) - фаервол и SSH-настройки ему не требуются, это общая гигиена сервера.
 
-**Docker** — ставить, только если его ещё нет:
+**Docker** - ставить, только если его ещё нет:
 
 ```bash
 docker --version || curl -fsSL https://get.docker.com | sh
 docker compose version     # нужен Compose v2 (плагин), не старый docker-compose
 ```
 
-**Пользователь проекта** — отдельный под каждый проект, чтобы не трогать чужие ключи и папки:
+**Пользователь проекта** - отдельный под каждый проект, чтобы не трогать чужие ключи и папки:
 
 ```bash
 id sglypa 2>/dev/null || sudo adduser --disabled-password --gecos "" sglypa
@@ -80,7 +80,7 @@ sudo usermod -aG docker sglypa
 sudo install -d -o sglypa -g sglypa -m 700 /opt/sglypa
 ```
 
-Членство в группе `docker` фактически равно root на всём сервере. Поэтому ключ CI жёстко ограничен `deploy.sh` (шаг 4.4) — по нему нельзя получить шелл.
+Членство в группе `docker` фактически равно root на всём сервере. Поэтому ключ CI жёстко ограничен `deploy.sh` (шаг 4.4) - по нему нельзя получить шелл.
 
 **Гигиена сервера (проверить, не применять вслепую):**
 
@@ -95,10 +95,10 @@ sudo ufw status verbose 2>/dev/null || sudo iptables -S | head -50
 dpkg -l unattended-upgrades fail2ban 2>/dev/null | grep ^ii
 ```
 
-Если что-то из этого не настроено — настраивай отдельно и аккуратно:
+Если что-то из этого не настроено - настраивай отдельно и аккуратно:
 - **SSH-пароли**: сначала убедись, что заходишь по ключу (`ssh -o PasswordAuthentication=no user@IP` в **новом** окне), и только потом ставь `PasswordAuthentication no` в `/etc/ssh/sshd_config` → `sudo systemctl reload ssh`. Текущую сессию не закрывай, пока не проверишь вход.
 - **ufw**: если он выключен, а на сервере крутятся сайты/сервисы, сначала разреши их порты (`sudo ufw allow OpenSSH`, `sudo ufw allow 80,443/tcp` и т.д. по `sudo ss -tlnp`), и только потом `sudo ufw enable`. Учти: Docker публикует порты контейнеров в обход ufw.
-- **fail2ban / unattended-upgrades**: `sudo apt install -y fail2ban unattended-upgrades` — безопасно для других сервисов.
+- **fail2ban / unattended-upgrades**: `sudo apt install -y fail2ban unattended-upgrades` - безопасно для других сервисов.
 
 ### 4.2. Файлы на сервер
 
@@ -118,11 +118,11 @@ rm /tmp/deploy.sh /tmp/docker-compose.yml /tmp/example.env
 sudo -u sglypa nano /opt/sglypa/.env      # вписать BOT_TOKEN и остальное
 ```
 
-`deploy.sh` принадлежит root — пользователь `sglypa` не может его подменить.
+`deploy.sh` принадлежит root - пользователь `sglypa` не может его подменить.
 
 ### 4.3. Доступ VPS к образам (только чтение)
 
-GitHub → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate. Галочка только `read:packages`, срок — год. (GHCR пока не поддерживает fine-grained токены.)
+GitHub → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate. Галочка только `read:packages`, срок - год. (GHCR пока не поддерживает fine-grained токены.)
 
 ```bash
 sudo -iu sglypa docker login ghcr.io -u DenKhar7    # пароль = этот токен
@@ -137,7 +137,7 @@ ssh-keygen -t ed25519 -f %USERPROFILE%\.ssh\durachyo_ci -N "" -C "gha-deploy"
 type %USERPROFILE%\.ssh\durachyo_ci.pub
 ```
 
-На VPS — разрешить этому ключу только `deploy.sh`:
+На VPS - разрешить этому ключу только `deploy.sh`:
 
 ```bash
 sudo -u sglypa mkdir -p -m 700 /home/sglypa/.ssh
@@ -151,11 +151,11 @@ sudo chmod 600 /home/sglypa/.ssh/authorized_keys
 ```cmd
 gh secret set DEPLOY_SSH_KEY < %USERPROFILE%\.ssh\durachyo_ci
 gh secret set DEPLOY_HOST -b "IP_VPS"
-ssh-keyscan -t ed25519 IP_VPS > known_hosts.tmp && gh secret set DEPLOY_KNOWN_HOSTS < known_hosts.tmp && del known_hosts.tmp
+ssh-keygen -F IP_VPS > kh.tmp && gh secret set DEPLOY_KNOWN_HOSTS < kh.tmp && del kh.tmp
 del %USERPROFILE%\.ssh\durachyo_ci
 ```
 
-Приватный ключ CI после загрузки в GitHub удаляется с ПК — он нужен только Actions. Если SSH не на 22 порту: `gh secret set DEPLOY_PORT -b "2222"`.
+Приватный ключ CI после загрузки в GitHub удаляется с ПК - он нужен только Actions. Если SSH не на 22 порту: `gh secret set DEPLOY_PORT -b "2222"`.
 
 ### 4.5. Деплой
 
@@ -165,7 +165,7 @@ del %USERPROFILE%\.ssh\durachyo_ci
 sudo -iu sglypa sh -c 'cd /opt/sglypa && docker compose logs -f'
 ```
 
-Текущая версия — в `/opt/sglypa/.deployed`. Откат: Actions → нужный старый запуск → Re-run jobs.
+Текущая версия - в `/opt/sglypa/.deployed`. Откат: Actions → нужный старый запуск → Re-run jobs.
 
 ### Бэкап
 
@@ -187,6 +187,6 @@ sudo -iu sglypa sh -c 'cd /opt/sglypa && docker compose cp bot:/app/data/sglypa.
 
 ## Как устроена генерация
 
-`bot/markov.py` — цепь Маркова по словам. Порядок задаётся `MARKOV_ORDER`: 1 — шиза, 2 — смешно и полусвязно, 3 — почти цитаты. Цепь строится в памяти из SQLite при первом обращении, дообучается на лету и раз в 500 сообщений пересобирается. 10k фраз — это несколько мегабайт RAM.
+`bot/markov.py` - цепь Маркова по словам. Порядок задаётся `MARKOV_ORDER`: 1 - шиза, 2 - смешно и полусвязно, 3 - почти цитаты. Цепь строится в памяти из SQLite при первом обращении, дообучается на лету и раз в 500 сообщений пересобирается. 10k фраз - это несколько мегабайт RAM.
 
 Случайные ответы (`bot/responder.py`) выбирают режим по весам: продолжение от слова из сообщения, свободный бред, цитата автора, кривляние, оскорбление.

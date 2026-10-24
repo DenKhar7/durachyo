@@ -40,6 +40,23 @@ def test_users_and_settings(tmp_path):
     assert (default, changed) == (5, 30)
 
 
+def test_tags(tmp_path):
+    async def scenario():
+        db = await Database.open(tmp_path / "t.db")
+        await db.set_tag(-1, "зигор", "Зигор", "педофайл")
+        await db.set_tag(-1, "зигор", "Зигор", "нуб")
+        await db.set_tag(-2, "егор", "Егор", "x")
+        tags = await db.tags(-1)
+        removed = await db.delete_tag(-1, "зигор")
+        missing = await db.delete_tag(-1, "зигор")
+        await db.close()
+        return tags, removed, missing
+
+    tags, removed, missing = run(scenario())
+    assert [(t.name, t.label) for t in tags] == [("Зигор", "нуб")]
+    assert (removed, missing) == (True, False)
+
+
 def test_forget_user(tmp_path):
     async def scenario():
         db = await Database.open(tmp_path / "t.db")

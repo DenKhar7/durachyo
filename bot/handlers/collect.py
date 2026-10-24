@@ -40,6 +40,6 @@ async def on_text(message: Message, bot_me: User, settings: Settings, db: Databa
             return
     if not _reply_cooldown.ready(chat_id, settings.reply_cooldown):
         return
-    reply = await build_reply(message, db, chains)
+    reply = await build_reply(message, db, chains, settings.tag_chance)
     if reply:
         await message.reply(reply)

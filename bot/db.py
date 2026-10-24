@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS users (
     PRIMARY KEY (chat_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS tags (
+    chat_id INTEGER NOT NULL,
+    key     TEXT    NOT NULL,
+    name    TEXT    NOT NULL,
+    label   TEXT    NOT NULL,
+    PRIMARY KEY (chat_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id      INTEGER PRIMARY KEY,
     reply_chance INTEGER NOT NULL
@@ -37,6 +45,13 @@ class KnownUser:
     user_id: int
     full_name: str
     username: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Tag:
+    key: str
+    name: str
+    label: str
 
 
 class Database:
@@ -158,6 +173,25 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return row[0], row[1]
+
+    async def set_tag(self, chat_id: int, key: str, name: str, label: str) -> None:
+        await self._conn.execute(
+            """INSERT INTO tags (chat_id, key, name, label) VALUES (?, ?, ?, ?)
+               ON CONFLICT (chat_id, key) DO UPDATE SET name = excluded.name, label = excluded.label""",
+            (chat_id, key, name, label),
+        )
+        await self._conn.commit()
+
+    async def delete_tag(self, chat_id: int, key: str) -> bool:
+        cur = await self._conn.execute("DELETE FROM tags WHERE chat_id = ? AND key = ?", (chat_id, key))
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    async def tags(self, chat_id: int) -> list[Tag]:
+        async with self._conn.execute(
+            "SELECT key, name, label FROM tags WHERE chat_id = ? ORDER BY key", (chat_id,)
+        ) as cur:
+            return [Tag(*row) for row in await cur.fetchall()]
 
     async def _one_user(self, query: str, args: tuple) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:

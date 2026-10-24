@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/sglypa.db")
     max_messages_per_chat: int = Field(10_000, ge=100)
     markov_order: int = Field(2, ge=1, le=4)
-    default_reply_chance: int = Field(5, ge=0, le=100)
+    default_reply_chance: int = Field(100, ge=0, le=100)
+    tag_chance: int = Field(60, ge=0, le=100)
     min_message_length: int = Field(2, ge=1)
     max_message_length: int = Field(1000, ge=10)
 

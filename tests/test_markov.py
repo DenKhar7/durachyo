@@ -55,6 +55,13 @@ def test_known_and_normalize():
     assert chain.known("ПИВО,") and not chain.known("...")
 
 
+def test_frequency_counts_normalized_words():
+    chain = make()
+    assert chain.frequency("Я") == 3
+    assert chain.frequency("пиво!") == 2
+    assert chain.frequency("водка") == 0
+
+
 def test_invalid_order():
     with pytest.raises(ValueError):
         MarkovChain(0)

@@ -23,6 +23,7 @@ class MarkovChain:
         self._model: dict[State, Counter[str]] = defaultdict(Counter)
         self._index: dict[str, set[State]] = defaultdict(set)
         self._originals: set[str] = set()
+        self._counts: Counter[str] = Counter()
 
     def __len__(self) -> int:
         return len(self._originals)
@@ -32,6 +33,7 @@ class MarkovChain:
         if not tokens:
             return
         self._originals.add(" ".join(tokens))
+        self._counts.update(k for k in map(normalize, tokens) if k)
         seq = [START] * self.order + tokens + [END]
         for i in range(len(seq) - self.order):
             state = tuple(seq[i : i + self.order])
@@ -43,6 +45,9 @@ class MarkovChain:
     def known(self, word: str) -> bool:
         key = normalize(word)
         return bool(key) and key in self._index
+
+    def frequency(self, word: str) -> int:
+        return self._counts.get(normalize(word), 0)
 
     def random_word(self, rng: random.Random | None = None) -> str | None:
         if not self._index:
