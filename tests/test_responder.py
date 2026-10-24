@@ -3,7 +3,7 @@ import random
 from bot.db import Tag
 from bot.markov import MarkovChain
 from bot.brain import analyze
-from bot.responder import find_tag, make_insult, mode_weights
+from bot.responder import blend, find_tag, make_insult, mode_weights, spice
 
 TAGS = [Tag("зигор", "Зигор", "педофайл"), Tag("егор", "Егор", "педофайл")]
 
@@ -39,8 +39,26 @@ def test_make_insult_on_empty_chain_falls_back():
 
 def test_mode_weights_follow_context():
     base = mode_weights(analyze("обычное сообщение средней длины"))
-    short = mode_weights(analyze("ок"))
-    assert short["free"] > short["seeded"]
+    assert base["phrase"] == max(base.values())
+    assert mode_weights(analyze("ок"))["short"] > base["short"]
     assert mode_weights(analyze("ВЫ ЧТО ТУТ ТВОРИТЕ"))["sponge"] > base["sponge"]
-    assert mode_weights(analyze("а что вы думаете про это?"))["seeded"] > base["seeded"]
-    assert min(short.values()) >= 1
+    assert mode_weights(analyze("а что вы думаете про это?"))["markov"] > base["markov"]
+    sticker = mode_weights(analyze("", media="sticker"))
+    assert sticker["sponge"] == 0 and sticker["sticker"] > base["sticker"]
+    photo = mode_weights(analyze("", media="photo"), photo=True)
+    assert photo["demotivator"] > 30
+    assert min(base.values()) >= 0
+
+
+def test_blend_glues_two_words():
+    out = blend("пидорства", "база")
+    assert out.startswith("пидор") and out.endswith("за")
+    assert blend("кот", "пес")
+
+
+def test_spice_keeps_word_count():
+    chain = MarkovChain(2)
+    chain.add("кибер котлета снова горит жёстко")
+    rng = random.Random(1)
+    for _ in range(50):
+        assert len(spice("котлета снова горит", chain, rng).split()) == 3

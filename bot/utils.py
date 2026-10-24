@@ -4,6 +4,8 @@ import time
 from collections.abc import Hashable, Iterable
 
 GROUP_TYPES = frozenset({"group", "supergroup"})
+# сглыпа, сглыпу, сглыпон, сглыпарик, зглыпа, слыпа, глыпское, сгныпена, снлыпа...
+NAME_RE = re.compile(r"(?:сг|зг|сн|с|г)[лн]ып|слып|глып")
 
 
 def mention(user_id: int, name: str | None) -> str:
@@ -23,7 +25,7 @@ def is_addressed(
     lowered = text.lower()
     if bot_username and f"@{bot_username.lower()}" in lowered:
         return True
-    return any(t in lowered for t in triggers)
+    return bool(NAME_RE.search(lowered)) or any(t in lowered for t in triggers)
 
 
 def strip_mention(text: str, bot_username: str | None) -> str:

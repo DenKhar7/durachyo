@@ -62,6 +62,19 @@ def test_frequency_counts_normalized_words():
     assert chain.frequency("водка") == 0
 
 
+def test_mix_splices_messages_through_shared_word():
+    corpus = ["я пью пиво дома", "мы пьём пиво на улице"]
+    strict, mixed = MarkovChain(2, mix=0.0), MarkovChain(2, mix=1.0)
+    for text in corpus:
+        strict.add(text)
+        mixed.add(text)
+    rng = random.Random(0)
+    assert strict.generate(allow_copy=False, rng=rng) is None
+    outputs = {mixed.generate(allow_copy=False, rng=rng) for _ in range(50)}
+    assert outputs - {None}
+    assert all(o not in corpus for o in outputs - {None})
+
+
 def test_invalid_order():
     with pytest.raises(ValueError):
         MarkovChain(0)

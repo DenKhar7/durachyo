@@ -69,3 +69,20 @@ def test_needs_revive_once_per_silence():
     clock.t += 99999
     assert not brain.needs_revive(-1, 3600)
     assert not brain.needs_revive(-1, 0)
+
+
+def test_called_chance_and_media_skip_word_penalty():
+    brain = Brain()
+    chatter(brain, 5)
+    assert brain.reply_probability(-1, analyze("сглыпа", addressed=True), 40, called_chance=80) == 80
+    assert brain.reply_probability(-1, analyze("", media="sticker"), 40) > brain.reply_probability(-1, analyze(""), 40)
+
+
+def test_memory_of_recent_and_own_lines():
+    brain = Brain()
+    state = brain.observe(-1, "привет")
+    brain.observe(-1)
+    assert list(state.recent) == ["привет"]
+    brain.spoke(-1, "Normalno", 42)
+    assert state.last_bot_plain == "Normalno" and state.last_bot_id == 42
+    assert not state.scored and "normalno" in state.recent_bot

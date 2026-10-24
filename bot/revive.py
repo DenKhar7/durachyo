@@ -8,16 +8,17 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
+from bot import voice
 from bot.brain import Brain
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database
+from bot.responder import pick_phrase
 from bot.utils import mention
 
 log = logging.getLogger(__name__)
 
 CHECK_EVERY = 600
-OPENERS = ("Чё затихли? ", "Тишина в чате... ", "Ау. ", "Скучно. ", "", "")
 
 
 def in_quiet_hours(hour: int, spec: str) -> bool:
@@ -44,20 +45,19 @@ async def revive_once(
     for chat_id in settings.allowed_chat_ids:
         if not brain.needs_revive(chat_id, settings.revive_after_hours * 3600):
             continue
-        text = (await chains.get(chat_id)).generate(rng=rng)
+        text = await pick_phrase(db, chat_id) or (await chains.get(chat_id)).generate(max_words=8, rng=rng)
         if not text:
             continue
+        body = html.escape(voice.casual(text, rng, verbatim=True))
         user = await db.random_user(chat_id)
-        if user and rng.random() < 0.5:
-            body = f"{mention(user.user_id, user.full_name)}, {html.escape(text)}"
-        else:
-            body = rng.choice(OPENERS) + html.escape(text)
+        if user and rng.random() < 0.4:
+            body = f"{mention(user.user_id, user.full_name)}, {body}"
         try:
-            await bot.send_message(chat_id, body)
+            sent = await bot.send_message(chat_id, body)
         except TelegramAPIError as exc:
             log.warning("revive in %s failed: %s", chat_id, exc)
             continue
-        brain.spoke(chat_id)
+        brain.spoke(chat_id, text, sent.message_id)
         sent += 1
     return sent
 

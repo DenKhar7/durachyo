@@ -33,15 +33,6 @@ INSULTS = (
     "{name} - живое доказательство, что эволюция иногда идёт назад.",
     "{name}, тебя родители на респавне забыли.",
 )
-QUOTES = (
-    "{name} когда-то выдал: «{quote}»",
-    "Напоминаю, {name} писал(а): «{quote}»",
-    "«{quote}» © {name}, великий мыслитель",
-    "{name}, а помнишь, как ты сказал(а) «{quote}»? Я помню. Я всё помню.",
-    "Цитаты великих людей. {name}: «{quote}»",
-    "{name}, скриншот сделан: «{quote}»",
-    "Архив позора, {name}: «{quote}»",
-)
 CHAT_INSULTS = (
     "{name}, ты {adj} {word}.",
     "{name}, ты как «{phrase}»: никто не понял, но всем противно.",
@@ -97,10 +88,6 @@ def chat_insult(name_html: str, phrase: str, word: str, adj: str, rng: random.Ra
     return (rng or random).choice(CHAT_INSULTS).format(
         name=name_html, phrase=html.escape(phrase), word=html.escape(word), adj=html.escape(adj)
     )
-
-
-def quote_back(name_html: str, quote: str, rng: random.Random | None = None) -> str:
-    return (rng or random).choice(QUOTES).format(name=name_html, quote=html.escape(quote))
 
 
 def tagged(name: str, tag: str, word: str | None = None, rng: random.Random | None = None) -> str:

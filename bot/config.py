@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     markov_order: int = Field(2, ge=1, le=4)
     default_reply_chance: int = Field(40, ge=0, le=100)
     tag_chance: int = Field(60, ge=0, le=100)
-    ping_chance: int = Field(12, ge=0, le=100)
+    ping_chance: int = Field(6, ge=0, le=100)
+    called_chance: int = Field(80, ge=0, le=100)
+    reaction_chance: int = Field(5, ge=0, le=100)
+    nick_chance: int = Field(50, ge=0, le=100)
+    catchphrases: Annotated[tuple[str, ...], NoDecode] = ("normalno", "normalno davai")
     revive_after_hours: float = Field(4.0, ge=0)
     quiet_hours: str = "1-10"
     timezone: str = "Europe/Moscow"
@@ -56,6 +60,12 @@ class Settings(BaseSettings):
     def _check_tz(cls, value: str) -> str:
         ZoneInfo(value)
         return value
+
+    @field_validator("catchphrases", mode="before")
+    @classmethod
+    def _parse_phrases(cls, value: Any) -> Any:
+        parts = _split(value)
+        return tuple(parts) if isinstance(parts, list) else parts
 
     @field_validator("trigger_words", mode="before")
     @classmethod

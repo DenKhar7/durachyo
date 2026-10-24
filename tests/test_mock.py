@@ -28,8 +28,3 @@ def test_tagged_escapes_and_fills():
     out = mock.tagged("Зигор", "педофайл", "<b>", random.Random(0))
     assert "Зигор" in out and "педофайл" in out and "<b>" not in out
     assert "«»" not in mock.tagged("Зигор", "педофайл", None, random.Random(0))
-
-
-def test_quote_back_escapes_quote():
-    out = mock.quote_back("Вася", "<b>жирный</b>", random.Random(0))
-    assert "&lt;b&gt;" in out and "<b>" not in out

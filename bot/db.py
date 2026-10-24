@@ -4,6 +4,12 @@ from pathlib import Path
 import aiosqlite
 
 _NOW = "CAST(strftime('%s', 'now') AS INTEGER)"
+_SPACES = "(length(trim(text)) - length(replace(trim(text), ' ', '')))"
+_BEFORE_RECENT = "id <= (SELECT id FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)"
+
+
+def _lower(value: str | None) -> str | None:
+    return value.lower() if value is not None else None
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS messages (
@@ -31,6 +37,24 @@ CREATE TABLE IF NOT EXISTS tags (
     name    TEXT    NOT NULL,
     label   TEXT    NOT NULL,
     PRIMARY KEY (chat_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS media (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    kind    TEXT    NOT NULL,
+    uid     TEXT    NOT NULL,
+    file_id TEXT    NOT NULL,
+    emoji   TEXT,
+    UNIQUE (chat_id, uid)
+);
+CREATE INDEX IF NOT EXISTS ix_media_chat_kind ON media (chat_id, kind, id);
+
+CREATE TABLE IF NOT EXISTS hits (
+    chat_id INTEGER NOT NULL,
+    text    TEXT    NOT NULL,
+    score   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, text)
 );
 
 CREATE TABLE IF NOT EXISTS chat_settings (
@@ -63,6 +87,7 @@ class Database:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = await aiosqlite.connect(path)
+        await conn.create_function("pylower", 1, _lower, deterministic=True)
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA synchronous=NORMAL")
         await conn.executescript(SCHEMA)
@@ -94,15 +119,71 @@ class Database:
         async with self._conn.execute(query, args) as cur:
             return [row[0] for row in await cur.fetchall()]
 
-    async def random_message(self, chat_id: int, user_id: int | None = None) -> tuple[int, str] | None:
-        if user_id is None:
-            query, args = "SELECT user_id, text FROM messages WHERE chat_id = ?", (chat_id,)
-        else:
-            query = "SELECT user_id, text FROM messages WHERE chat_id = ? AND user_id = ?"
-            args = (chat_id, user_id)
+    async def old_phrase(
+        self,
+        chat_id: int,
+        skip_recent: int,
+        *,
+        word: str | None = None,
+        min_words: int = 2,
+        max_words: int = 12,
+    ) -> str | None:
+        """Random message older than the newest skip_recent ones; optionally containing word (case-insensitive)."""
+        query = f"SELECT text FROM messages WHERE chat_id = ? AND {_BEFORE_RECENT} AND {_SPACES} BETWEEN ? AND ?"
+        args: list = [chat_id, chat_id, skip_recent, min_words - 1, max_words - 1]
+        if word:
+            query += " AND pylower(text) LIKE ?"
+            args.append(f"%{word.lower().replace('_', '')}%")
         async with self._conn.execute(query + " ORDER BY RANDOM() LIMIT 1", args) as cur:
             row = await cur.fetchone()
-        return (row[0], row[1]) if row else None
+        return row[0] if row else None
+
+    async def short_phrases(self, chat_id: int, limit: int = 150, min_count: int = 2) -> list[tuple[str, int]]:
+        """The chat's own go-to replies: messages of up to 3 words that people keep repeating."""
+        async with self._conn.execute(
+            f"""SELECT pylower(trim(text)) AS t, COUNT(*) AS n FROM messages
+                WHERE chat_id = ? AND length(text) <= 30 AND {_SPACES} <= 2
+                GROUP BY t HAVING n >= ? ORDER BY n DESC LIMIT ?""",
+            (chat_id, min_count, limit),
+        ) as cur:
+            return [(row[0], row[1]) for row in await cur.fetchall()]
+
+    async def add_media(
+        self, chat_id: int, kind: str, uid: str, file_id: str, emoji: str | None = None, keep: int = 500
+    ) -> None:
+        await self._conn.execute(
+            """INSERT INTO media (chat_id, kind, uid, file_id, emoji) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (chat_id, uid) DO UPDATE SET file_id = excluded.file_id""",
+            (chat_id, kind, uid, file_id, emoji),
+        )
+        await self._conn.execute(
+            """DELETE FROM media WHERE chat_id = ? AND kind = ? AND id <= (
+                   SELECT id FROM media WHERE chat_id = ? AND kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?
+               )""",
+            (chat_id, kind, chat_id, kind, keep),
+        )
+        await self._conn.commit()
+
+    async def random_media(self, chat_id: int, kind: str) -> str | None:
+        async with self._conn.execute(
+            "SELECT file_id FROM media WHERE chat_id = ? AND kind = ? ORDER BY RANDOM() LIMIT 1", (chat_id, kind)
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def add_hit(self, chat_id: int, text: str) -> None:
+        await self._conn.execute(
+            """INSERT INTO hits (chat_id, text, score) VALUES (?, ?, 1)
+               ON CONFLICT (chat_id, text) DO UPDATE SET score = score + 1""",
+            (chat_id, text),
+        )
+        await self._conn.commit()
+
+    async def hits(self, chat_id: int, limit: int = 50) -> list[tuple[str, int]]:
+        async with self._conn.execute(
+            "SELECT text, score FROM hits WHERE chat_id = ? ORDER BY score DESC LIMIT ?", (chat_id, limit)
+        ) as cur:
+            return [(row[0], row[1]) for row in await cur.fetchall()]
 
     async def upsert_user(self, chat_id: int, user_id: int, full_name: str, username: str | None) -> None:
         await self._conn.execute(
