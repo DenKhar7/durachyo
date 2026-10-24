@@ -42,6 +42,18 @@ QUOTES = (
     "{name}, скриншот сделан: «{quote}»",
     "Архив позора, {name}: «{quote}»",
 )
+CHAT_INSULTS = (
+    "{name}, ты {adj} {word}.",
+    "{name}, ты как «{phrase}»: никто не понял, но всем противно.",
+    "{name}, у тебя в голове одно: «{phrase}».",
+    "{name} опять за своё: «{phrase}».",
+    "{name}, «{phrase}» - это про тебя.",
+    "{name}, иди {word} потрогай.",
+    "{name}, {adj} {word}, вот ты кто.",
+    "Чат, кто тут самый {adj}? Правильно, {name}.",
+    "{name}, мы все помним твоё «{phrase}».",
+    "{name}, ещё раз напишешь и я расскажу всем про «{phrase}».",
+)
 TAGGED = (
     "А ну да, {name} тот ещё {tag} по «{word}».",
     "{name}? Это который {tag}? Ну да, ну да, особенно по «{word}».",
@@ -77,6 +89,13 @@ def insult(name_html: str, word: str | None = None, rng: random.Random | None = 
         adj=rng.choice(ADJECTIVES),
         noun=rng.choice(NOUNS),
         word=html.escape(word or ""),
+    )
+
+
+def chat_insult(name_html: str, phrase: str, word: str, adj: str, rng: random.Random | None = None) -> str:
+    """Insult assembled from the chat's own vocabulary."""
+    return (rng or random).choice(CHAT_INSULTS).format(
+        name=name_html, phrase=html.escape(phrase), word=html.escape(word), adj=html.escape(adj)
     )
 
 

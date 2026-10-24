@@ -1,5 +1,7 @@
+import re
 from pathlib import Path
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -22,8 +24,12 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/sglypa.db")
     max_messages_per_chat: int = Field(10_000, ge=100)
     markov_order: int = Field(2, ge=1, le=4)
-    default_reply_chance: int = Field(100, ge=0, le=100)
+    default_reply_chance: int = Field(40, ge=0, le=100)
     tag_chance: int = Field(60, ge=0, le=100)
+    ping_chance: int = Field(12, ge=0, le=100)
+    revive_after_hours: float = Field(4.0, ge=0)
+    quiet_hours: str = "1-10"
+    timezone: str = "Europe/Moscow"
     min_message_length: int = Field(2, ge=1)
     max_message_length: int = Field(1000, ge=10)
 
@@ -36,6 +42,20 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_ids(cls, value: Any) -> Any:
         return _split(value)
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def _check_quiet(cls, value: str) -> str:
+        m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", value.strip())
+        if not m or int(m[1]) > 23 or int(m[2]) > 23:
+            raise ValueError("QUIET_HOURS must look like 1-10 (hours 0..23)")
+        return value.strip()
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_tz(cls, value: str) -> str:
+        ZoneInfo(value)
+        return value
 
     @field_validator("trigger_words", mode="before")
     @classmethod

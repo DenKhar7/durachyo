@@ -49,6 +49,9 @@ class MarkovChain:
     def frequency(self, word: str) -> int:
         return self._counts.get(normalize(word), 0)
 
+    def vocabulary(self) -> tuple[str, ...]:
+        return tuple(self._counts)
+
     def random_word(self, rng: random.Random | None = None) -> str | None:
         if not self._index:
             return None

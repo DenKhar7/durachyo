@@ -4,7 +4,6 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 
-from bot import mock
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database, KnownUser
@@ -19,20 +18,15 @@ _all_cooldown = Cooldown()
 MENTIONS_PER_MESSAGE = 5
 
 HELP = (
-    "<b>Сглыпа 2.0</b> - запоминаю, что вы пишете, и использую против вас.\n\n"
-    "/sglyp - бред по мотивам чата\n"
-    "/sglyp @user - бред в стиле человека (или реплаем)\n"
-    "/sglyp слово - бред со слова\n"
-    "/quote [@user] - достать старую фразу\n"
-    "/mock - реплаем: пОвТоРиТь С кРиВлЯнИеМ\n"
-    "/insult [@user] - оскорбить\n"
+    "<b>Сглыпа 2.0</b> - запоминаю, что вы пишете, и использую против вас. "
+    "Сам решаю, когда влезть, кого подколоть и когда разбудить заглохший чат.\n\n"
+    "Позвать: ответь мне, упомяни или напиши «сглыпа».\n\n"
+    "/sglyp [@user|слово] - бред по чату, в стиле человека или со слова\n"
     "/all - пингануть всех\n"
-    "/stats - статистика\n"
-    "/forgetme - стереть мои сообщения из памяти\n"
-    "/chance N - шанс влезть в разговор, % (админ)\n"
-    "/tag Имя ярлык - подкалывать, когда пишут это имя (админ)\n"
-    "/untag Имя, /tags - убрать ярлык, список (админ)"
+    "/forgetme - стереть мои сообщения из памяти\n\n"
+    "Админ: /chance N (болтливость), /tag Имя ярлык, /untag Имя, /tags"
 )
+
 
 
 async def _resolve_target(message: Message, command: CommandObject, db: Database) -> tuple[KnownUser | None, bool]:
@@ -78,43 +72,6 @@ async def cmd_sglyp(message: Message, command: CommandObject, db: Database, chai
     await message.answer(body)
 
 
-@router.message(Command("quote"), in_group)
-async def cmd_quote(message: Message, command: CommandObject, db: Database) -> None:
-    target, ok = await _resolve_target(message, command, db)
-    if not ok:
-        return
-    row = await db.random_message(message.chat.id, target.user_id if target else None)
-    if row is None:
-        await message.reply("Нечего цитировать.")
-        return
-    user_id, text = row
-    user = target or await db.get_user(message.chat.id, user_id)
-    await message.answer(mock.quote_back(mention(user_id, user.full_name if user else None), text))
-
-
-@router.message(Command("mock"), in_group)
-async def cmd_mock(message: Message) -> None:
-    reply = message.reply_to_message
-    source = (reply.text or reply.caption) if reply and reply.forum_topic_created is None else None
-    if not source:
-        await message.reply("Ответь этой командой на сообщение.")
-        return
-    await reply.reply(html.escape(mock.spongebob(source)))
-
-
-@router.message(Command("insult"), in_group)
-async def cmd_insult(message: Message, command: CommandObject, db: Database, chains: ChainStore) -> None:
-    target, ok = await _resolve_target(message, command, db)
-    if not ok:
-        return
-    target = target or await db.random_user(message.chat.id)
-    if target is None:
-        await message.reply("Некого оскорблять. Пока.")
-        return
-    chain = await chains.get(message.chat.id)
-    await message.answer(mock.insult(mention(target.user_id, target.full_name), chain.random_word()))
-
-
 @router.message(Command("all"), in_group)
 async def cmd_all(message: Message, db: Database, settings: Settings) -> None:
     if not _all_cooldown.ready(message.chat.id, settings.all_cooldown):
@@ -128,16 +85,6 @@ async def cmd_all(message: Message, db: Database, settings: Settings) -> None:
     for i, part in enumerate(chunks(users, MENTIONS_PER_MESSAGE)):
         prefix = "Общий сбор! " if i == 0 else ""
         await message.answer(prefix + " ".join(mention(u.user_id, u.full_name) for u in part))
-
-
-@router.message(Command("stats"), in_group)
-async def cmd_stats(message: Message, db: Database, settings: Settings) -> None:
-    messages, users = await db.stats(message.chat.id)
-    chance = await db.reply_chance(message.chat.id, settings.default_reply_chance)
-    await message.answer(
-        f"Помню {messages}/{settings.max_messages_per_chat} фраз от {users} человек. "
-        f"Шанс влезть в разговор: {chance}%."
-    )
 
 
 @router.message(Command("forgetme"), in_group)
