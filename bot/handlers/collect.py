@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import random
 from contextlib import suppress
@@ -14,7 +15,7 @@ from bot.config import Settings
 from bot.db import Database
 from bot.nicknames import find_nick, nick_line
 from bot.responder import Reply, best_photo, build_reply, find_tag
-from bot.utils import GROUP_TYPES, Cooldown, is_addressed, strip_mention
+from bot.utils import GROUP_TYPES, Cooldown, is_addressed, mention, strip_mention, who_question
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,15 @@ MEDIA = frozenset({"sticker", "photo", "animation", "voice", "video_note", "vide
 BURST_CHANCE = 0.04
 NICK_COOLDOWN = 30.0
 _reply_cooldown = Cooldown()
+WHO_COOLDOWN = 3.0
+WHO_LINES = (
+    "{name} {what}",
+    "это {name} {what}",
+    "{name} {what}, я видел",
+    "очевидно же, {name} {what}",
+    "{name} {what}, инфа сотка",
+    "все знают, что {name} {what}",
+)
 _rng = random.Random()
 
 
@@ -78,6 +88,12 @@ async def handle(
         await chains.learn(chat_id, clean)
     await remember_media(db, message)
 
+    if called and text:
+        what = who_question(clean)
+        if what and _reply_cooldown.ready(("who", chat_id), WHO_COOLDOWN):
+            await answer_who(message, what, db, brain)
+            return
+
     if text and await tease_nick(message, text, bot, settings, brain):
         return
     await maybe_react(bot, message, laugh=laugh, media=media is not None, chance=settings.reaction_chance)
@@ -111,6 +127,17 @@ async def handle(
         follow = await send(message, Reply(text=extra, plain=extra, mode="burst"), False, delay=False)
         if follow:
             brain.spoke(chat_id, extra, follow.message_id)
+
+
+async def answer_who(message: Message, what: str, db: Database, brain: Brain) -> None:
+    """'@bot кто насрал' -> pings a random person from the chat: 'Вася насрал'."""
+    user = await db.random_user(message.chat.id)
+    author = message.from_user
+    name = mention(user.user_id, user.full_name) if user else mention(author.id, author.full_name)
+    line = _rng.choice(WHO_LINES).format(name=name, what=html.escape(what))
+    sent = await send(message, Reply(text=line, mode="who"), True)
+    if sent:
+        brain.spoke(message.chat.id, None, sent.message_id)
 
 
 async def tease_nick(message: Message, text: str, bot: Bot, settings: Settings, brain: Brain) -> bool:

@@ -28,6 +28,19 @@ def is_addressed(
     return bool(NAME_RE.search(lowered)) or any(t in lowered for t in triggers)
 
 
+_WHO = re.compile(r"(?:^|[\s,.!:])кто\s+([^?!.\n]{1,60})", re.IGNORECASE)
+
+
+def who_question(text: str) -> str | None:
+    """'сглыпа, кто насрал?' -> 'насрал'. The bot's own names are dropped from the answer."""
+    m = _WHO.search(text)
+    if not m:
+        return None
+    words = [w for w in m.group(1).split() if not NAME_RE.search(w.lower()) and not w.startswith("@")]
+    what = " ".join(words).strip(" ,")
+    return what[:1].lower() + what[1:] if what else None
+
+
 def strip_mention(text: str, bot_username: str | None) -> str:
     if bot_username:
         text = re.sub(rf"@{re.escape(bot_username)}\b", "", text, flags=re.IGNORECASE)

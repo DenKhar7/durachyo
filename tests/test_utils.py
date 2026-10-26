@@ -1,4 +1,4 @@
-from bot.utils import Cooldown, chunks, is_addressed, mention, strip_mention
+from bot.utils import Cooldown, chunks, is_addressed, mention, strip_mention, who_question
 
 
 def test_mention_escapes_name():
@@ -27,3 +27,12 @@ def test_cooldown():
 
 def test_chunks():
     assert list(chunks([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
+
+
+def test_who_question():
+    assert who_question("кто насрал") == "насрал"
+    assert who_question("Сглыпа, кто насрал?") == "насрал"
+    assert who_question("@sglyper_bot кто Насрал в чате") == "насрал в чате"
+    assert who_question("кто насрал сглыпа") == "насрал"
+    assert who_question("никто не пришёл") is None
+    assert who_question("сглыпа привет") is None

@@ -206,22 +206,44 @@ async def _sticker(t: Turn) -> Reply | None:
     return Reply(sticker=sticker, mode="sticker") if sticker else None
 
 
-async def _demotivator(t: Turn) -> Reply | None:
-    photo = best_photo(t.message.photo)
-    file_id = photo.file_id if photo else await t.db.random_media(t.chat_id, "photo")
+async def chat_demotivator(
+    bot: Bot,
+    db: Database,
+    chain: MarkovChain,
+    chat_id: int,
+    file_id: str | None = None,
+    *,
+    seed_text: str = "",
+    title: str | None = None,
+    avoid: set[str] | frozenset[str] = frozenset(),
+    rng: random.Random | None = None,
+) -> bytes | None:
+    """Demotivator from a chat photo (given or random remembered one) captioned with the chat's own words."""
+    rng = rng or random.Random()
+    file_id = file_id or await db.random_media(chat_id, "photo")
     if not file_id:
         return None
-    title = await pick_phrase(t.db, t.chat_id, rare_words(t.text, t.chain, t.rng), _avoid(t), max_words=8)
-    title = title or t.chain.generate(max_words=6, rng=t.rng)
+    if not title:
+        title = await pick_phrase(db, chat_id, rare_words(seed_text, chain, rng), avoid, max_words=8)
+        title = title or chain.generate(max_words=6, rng=rng)
     if not title:
         return None
-    subtitle = t.chain.generate(max_words=6, rng=t.rng) if t.rng.random() < 0.5 else None
+    subtitle = chain.generate(max_words=6, rng=rng) if rng.random() < 0.5 else None
     try:
-        data = (await t.bot.download(file_id)).read()
-    except (TelegramAPIError, AttributeError) as exc:
-        log.warning("photo download failed: %s", exc)
+        data = (await bot.download(file_id)).read()
+        return await asyncio.to_thread(make_demotivator, data, title, subtitle)
+    except (TelegramAPIError, AttributeError, OSError) as exc:
+        log.warning("demotivator failed: %s", exc)
         return None
-    return Reply(photo=await asyncio.to_thread(make_demotivator, data, title, subtitle), mode="demotivator")
+
+
+async def _demotivator(t: Turn) -> Reply | None:
+    photo = best_photo(t.message.photo)
+    data = await chat_demotivator(
+        t.bot, t.db, t.chain, t.chat_id, photo.file_id if photo else None,
+        seed_text=t.text, avoid=_avoid(t), rng=t.rng,
+    )
+    return Reply(photo=data, mode="demotivator") if data else None
 
 
 async def _insult(t: Turn) -> Reply | None:
@@ -255,14 +277,14 @@ def mode_weights(ctx: Context, *, photo: bool = False) -> dict[str, int]:
     """How to answer, from what was said. Old phrases and short chat reactions dominate, like the original."""
     w = {
         "phrase": 35, "short": 25, "markov": 20, "echo": 8, "hit": 6,
-        "sticker": 5, "demotivator": 3, "insult": 3, "sponge": 1,
+        "sticker": 5, "demotivator": 10, "insult": 3, "sponge": 1,
     }
     if ctx.media:
         w.update(markov=5, echo=4, sponge=0)
         w["short"] += 20
         w["sticker"] += 15
         if photo:
-            w["demotivator"] += 35
+            w["demotivator"] += 60
     else:
         if ctx.question:
             w["markov"] += 15

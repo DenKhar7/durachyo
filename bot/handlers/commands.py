@@ -1,13 +1,16 @@
 import html
+import random
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database, KnownUser
 from bot.middlewares import CommandCooldownMiddleware
+from bot.responder import best_photo, chat_demotivator
 from bot.utils import GROUP_TYPES, Cooldown, chunks, mention
 
 router = Router(name="commands")
@@ -22,6 +25,8 @@ HELP = (
     "Сам решаю, когда влезть, кого подколоть и когда разбудить заглохший чат.\n\n"
     "Позвать: ответь мне, упомяни или напиши «сглыпа».\n\n"
     "/sglyp [@user|слово] - бред по чату, в стиле человека или со слова\n"
+    "/demotiv или /демотив [текст] - демотиватор (реплаем на фото - из него)\n"
+    "@бот кто насрал? - узнать правду\n"
     "/all - пингануть всех\n"
     "/forgetme - стереть мои сообщения из памяти\n\n"
     "Админ: /chance N (болтливость), /tag Имя ярлык, /untag Имя, /tags"
@@ -70,6 +75,28 @@ async def cmd_sglyp(message: Message, command: CommandObject, db: Database, chai
     if target:
         body = f"Как сказал бы {mention(target.user_id, target.full_name)}: «{body}»"
     await message.answer(body)
+
+
+@router.message(Command("demotiv", "демотив", "dem", "дем"), in_group)
+async def cmd_demotiv(message: Message, command: CommandObject, bot: Bot, db: Database, chains: ChainStore) -> None:
+    src = message.reply_to_message
+    photo = best_photo(src.photo) if src and src.photo else best_photo(message.photo)
+    seed = (src.text or src.caption or "") if src else ""
+    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_PHOTO, message_thread_id=message.message_thread_id)
+    data = await chat_demotivator(
+        bot,
+        db,
+        await chains.get(message.chat.id),
+        message.chat.id,
+        photo.file_id if photo else None,
+        seed_text=seed,
+        title=(command.args or "").strip()[:120] or None,
+        rng=random.Random(),
+    )
+    if data is None:
+        await message.reply("Нет картинок. Скиньте фото в чат, я запомню.")
+        return
+    await message.answer_photo(BufferedInputFile(data, "demotivator.jpg"))
 
 
 @router.message(Command("all"), in_group)
