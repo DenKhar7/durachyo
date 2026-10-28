@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS toad_days (
     PRIMARY KEY (chat_id, user_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS toad_posts (
+    chat_id    INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,  -- the bot's message with the toad, for /нежаба
+    meme_id    INTEGER NOT NULL,
+    day        TEXT    NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS toad_bans (
+    uid TEXT PRIMARY KEY  -- memes voted «не жаба»: never added again
+);
+
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id      INTEGER PRIMARY KEY,
     reply_chance INTEGER NOT NULL
@@ -325,23 +337,45 @@ class Database:
             return [Tag(*row) for row in await cur.fetchall()]
 
     async def add_toad_memes(self, links: Sequence[tuple[str, str, str]]) -> int:
-        """Shared memes from the internet as (kind, source, url); known urls are skipped."""
+        """Shared memes from the internet as (kind, source, url); known and banned urls are skipped."""
         before = self._conn.total_changes
         await self._conn.executemany(
-            "INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, url, uid) VALUES (NULL, ?, ?, ?, ?)",
-            [(kind, source, url, url) for kind, source, url in links],
+            """INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, url, uid)
+               SELECT NULL, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM toad_bans WHERE uid = ?)""",
+            [(kind, source, url, url, url) for kind, source, url in links],
         )
         await self._conn.commit()
         return self._conn.total_changes - before
 
     async def add_chat_toad(self, chat_id: int, kind: str, uid: str, file_id: str) -> bool:
+        key = f"tg:{uid}"
         cur = await self._conn.execute(
             """INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, file_id, uid)
-               VALUES (?, ?, 'chat', ?, ?)""",
-            (chat_id, kind, file_id, f"tg:{uid}"),
+               SELECT ?, ?, 'chat', ?, ? WHERE NOT EXISTS (SELECT 1 FROM toad_bans WHERE uid = ?)""",
+            (chat_id, kind, file_id, key, key),
         )
         await self._conn.commit()
         return cur.rowcount > 0
+
+    async def remember_toad_post(self, chat_id: int, message_id: int, meme_id: int, day: date) -> None:
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO toad_posts (chat_id, message_id, meme_id, day) VALUES (?, ?, ?, ?)",
+            (chat_id, message_id, meme_id, day.isoformat()),
+        )
+        await self._conn.commit()
+
+    async def toad_by_post(self, chat_id: int, message_id: int) -> ToadMeme | None:
+        return await self._one_toad(
+            f"{_TOAD} JOIN toad_posts p ON p.meme_id = m.id WHERE p.chat_id = ? AND p.message_id = ?",
+            (chat_id, message_id),
+        )
+
+    async def ban_toad_meme(self, meme_id: int) -> None:
+        """«Не жаба»: the meme is gone for good, refills won't bring it back."""
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO toad_bans (uid) SELECT uid FROM toad_memes WHERE id = ?", (meme_id,)
+        )
+        await self.drop_toad_meme(meme_id)
 
     async def toad_meme_count(self, chat_id: int | None = None) -> int:
         """Shared memes (chat_id=None) or one chat's own collection."""
@@ -367,19 +401,29 @@ class Database:
             f"""{_TOAD}
                 WHERE m.chat_id IS ?
                   AND m.id NOT IN (SELECT meme_id FROM toad_days WHERE chat_id = ? AND day = ?)
-                  AND (? OR m.source != 'itswednesdaymydudes')
-                ORDER BY (m.source = 'itswednesdaymydudes') DESC, RANDOM()
+                  AND (? OR m.source != 'wednesday')
+                ORDER BY (m.source = 'wednesday') DESC, RANDOM()
                 LIMIT 1""",  # noqa: S608
             (chat_id if own else None, chat_id, day.isoformat(), wednesday),
         )
 
-    async def prune_toads(self, today: date, *, keep_shared: int, keep_days: int = 2) -> None:
-        """Keeps the toad tables tiny: drops old day records and the oldest shared memes over keep_shared.
+    async def prune_toads(
+        self, today: date, *, keep_shared: int, sources: Sequence[str], keep_days: int = 2
+    ) -> None:
+        """Keeps the toad tables tiny and clean.
 
-        Memes someone holds today are never dropped.
+        Shared memes from sources no longer used are dropped at once, even if someone holds one today.
+        Then old day records go, and the oldest shared memes over keep_shared unless someone holds them.
         """
+        marks = ", ".join("?" * len(sources))
+        stale = f"SELECT id FROM toad_memes WHERE chat_id IS NULL AND source NOT IN ({marks})"  # noqa: S608
+        await self._conn.execute(f"DELETE FROM toad_days WHERE meme_id IN ({stale})", tuple(sources))  # noqa: S608
+        await self._conn.execute(f"DELETE FROM toad_memes WHERE id IN ({stale})", tuple(sources))  # noqa: S608
         since = date.fromordinal(today.toordinal() - keep_days).isoformat()
         await self._conn.execute("DELETE FROM toad_days WHERE day < ?", (since,))
+        await self._conn.execute(
+            "DELETE FROM toad_posts WHERE day < ? OR meme_id NOT IN (SELECT id FROM toad_memes)", (since,)
+        )
         await self._conn.execute(
             """DELETE FROM toad_memes WHERE chat_id IS NULL
                  AND id NOT IN (SELECT meme_id FROM toad_days)
@@ -402,6 +446,7 @@ class Database:
     async def drop_toad_meme(self, meme_id: int) -> None:
         """A meme Telegram can't fetch any more (deleted on Reddit): forget it and who had it."""
         await self._conn.execute("DELETE FROM toad_days WHERE meme_id = ?", (meme_id,))
+        await self._conn.execute("DELETE FROM toad_posts WHERE meme_id = ?", (meme_id,))
         await self._conn.execute("DELETE FROM toad_memes WHERE id = ?", (meme_id,))
         await self._conn.commit()
 

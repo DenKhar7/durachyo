@@ -97,7 +97,7 @@ async def test_toad_is_sent_and_remembered(app: App) -> None:
     app.toads._last_refill = 1e18
     message = fake_message()
     message.answer_photo.return_value = SimpleNamespace(
-        photo=[SimpleNamespace(file_id="TG_FILE")], animation=None, sticker=None
+        message_id=55, photo=[SimpleNamespace(file_id="TG_FILE")], animation=None, sticker=None
     )
     await commands.cmd_toad(cast(Message, message), command("жаба"), app)
     call = message.answer_photo.await_args
@@ -105,7 +105,7 @@ async def test_toad_is_sent_and_remembered(app: App) -> None:
     assert "жаба дня" in call.kwargs["caption"] and "Сила:" in call.kwargs["caption"]
 
     again = fake_message()
-    again.answer_photo.return_value = SimpleNamespace(photo=None, animation=None, sticker=None)
+    again.answer_photo.return_value = SimpleNamespace(message_id=56, photo=None, animation=None, sticker=None)
     await commands.cmd_toad(cast(Message, again), command("жаба"), app)
     assert again.answer_photo.await_args is not None and again.answer_photo.await_args.args[0] == "TG_FILE"
 
@@ -121,3 +121,34 @@ async def test_toad_add_needs_a_picture(app: App) -> None:
     message.reply_to_message = replied
     await commands.cmd_toad(cast(Message, message), command("жаба", "добавь"), app)
     assert "теперь их 1" in said(message)
+
+
+async def test_not_toad_bans_meme_and_frees_the_day(app: App) -> None:
+    await app.db.add_toad_memes([("photo", "frogmemes", f"https://x/{i}.jpg") for i in range(400)])
+    app.toads._last_refill = 1e18
+    message = fake_message()
+    message.answer_photo.return_value = SimpleNamespace(
+        message_id=55, photo=[SimpleNamespace(file_id="F")], animation=None, sticker=None
+    )
+    await commands.cmd_toad(cast(Message, message), command("жаба"), app)
+    call = message.answer_photo.await_args
+    assert call is not None
+    url = str(call.args[0])
+
+    vote = fake_message()
+    vote.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=app.me.id), message_id=55)
+    await commands.cmd_not_toad(cast(Message, vote), app)
+    assert "Выкинул" in said(vote)
+    app.bot.delete_message.assert_awaited_once_with(CHAT, 55)  # type: ignore[attr-defined]
+    assert await app.db.add_toad_memes([("photo", "frogmemes", url)]) == 0
+    assert await app.db.toad_meme_count() == 399
+
+
+async def test_not_toad_needs_a_reply_to_the_bot(app: App) -> None:
+    message = fake_message()
+    await commands.cmd_not_toad(cast(Message, message), app)
+    assert "Ответь" in said(message)
+    message = fake_message()
+    message.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=app.me.id), message_id=999)
+    await commands.cmd_not_toad(cast(Message, message), app)
+    assert "Не нашёл" in said(message)

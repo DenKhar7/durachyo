@@ -28,6 +28,12 @@ def test_parse_memes_keeps_safe_pictures_and_gifs() -> None:
     payload = {
         "memes": [
             {"url": "https://i.redd.it/a.jpg", "nsfw": False, "spoiler": False},
+            {
+                "url": "https://i.redd.it/w.jpg",
+                "nsfw": False,
+                "spoiler": False,
+                "title": "It is Wednesday my dudes",
+            },
             {"url": "https://i.redd.it/b.gif", "nsfw": False, "spoiler": False},
             {"url": "https://i.redd.it/c.jpg", "nsfw": True, "spoiler": False},
             {"url": "https://v.redd.it/video", "nsfw": False, "spoiler": False},
@@ -36,6 +42,7 @@ def test_parse_memes_keeps_safe_pictures_and_gifs() -> None:
     }
     assert parse_memes(payload, "frogmemes") == [
         MemeLink("photo", "https://i.redd.it/a.jpg", "frogmemes"),
+        MemeLink("photo", "https://i.redd.it/w.jpg", "wednesday"),
         MemeLink("animation", "https://i.redd.it/b.gif", "frogmemes"),
     ]
     assert parse_memes({}, "x") == []
@@ -43,7 +50,7 @@ def test_parse_memes_keeps_safe_pictures_and_gifs() -> None:
 
 async def stock(db: Database) -> None:
     links = [("photo", "frogmemes", f"https://x/{i}.jpg") for i in range(5)]
-    links.append(("photo", "itswednesdaymydudes", "https://x/wed.jpg"))
+    links.append(("photo", "wednesday", "https://x/wed.jpg"))
     assert await db.add_toad_memes(links) == 6
     assert await db.add_toad_memes(links) == 0
 
@@ -69,7 +76,7 @@ async def test_wednesday_meme_comes_first_on_wednesday(db: Database, monkeypatch
     pool = ToadPool()
     pool._last_refill = 1e18
     meme = await pool.pick(db, -1, 10, DAY, random.Random(0))
-    assert meme is not None and meme.source == "itswednesdaymydudes"
+    assert meme is not None and meme.source == "wednesday"
 
 
 async def test_chat_collection_and_dead_memes(db: Database) -> None:
@@ -98,7 +105,22 @@ async def test_prune_keeps_pool_small_and_todays_toads(db: Database) -> None:
     assert held is not None
     await db.give_toad(-1, 10, DAY, held.id)
     await db.give_toad(-1, 11, date(2026, 10, 1), held.id)
-    await db.prune_toads(DAY, keep_shared=3)
+    await db.prune_toads(DAY, keep_shared=3, sources=("frogmemes",))
     assert await db.toad_meme_count() <= 4
     assert await db.toad_of_day(-1, 10, DAY) == held
     assert await db.toad_of_day(-1, 11, date(2026, 10, 1)) is None
+
+
+async def test_prune_drops_retired_sources_even_if_held(db: Database) -> None:
+    await db.add_toad_memes([("photo", "itswednesdaymydudes", "https://x/guy.jpg")])
+    await db.add_toad_memes([("photo", "frogmemes", "https://x/frog.jpg")])
+    await db.add_chat_toad(-1, "sticker", "u", "F")
+    guy = await db.pick_toad_meme(-1, DAY, own=False, wednesday=False)
+    while guy is not None and guy.source != "itswednesdaymydudes":
+        guy = await db.pick_toad_meme(-1, DAY, own=False, wednesday=False)
+    assert guy is not None
+    await db.give_toad(-1, 10, DAY, guy.id)
+    await db.prune_toads(DAY, keep_shared=100, sources=("frogmemes", "wednesday"))
+    assert await db.toad_of_day(-1, 10, DAY) is None
+    assert await db.toad_meme_count() == 1
+    assert await db.toad_meme_count(-1) == 1

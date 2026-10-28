@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -22,8 +23,11 @@ from bot.db import Database, ToadMeme
 log = logging.getLogger(__name__)
 
 API_URL = "https://meme-api.com/gimme/{subreddit}/50"
-SUBREDDITS = ("frogmemes", "frog_irl", "frogsinhats", "itswednesdaymydudes")
-WEDNESDAY_SOURCE = "itswednesdaymydudes"
+# Only subreddits where every post is a frog. r/itswednesdaymydudes was dropped: people post
+# themselves in «it's wednesday» hats there, not toads.
+SUBREDDITS = ("frogmemes", "frog_irl", "frogsinhats")
+WEDNESDAY_SOURCE = "wednesday"  # frog memes whose title mentions Wednesday
+_WEDNESDAY_TITLE = re.compile(r"wednesday|среда", re.IGNORECASE)
 WEDNESDAY = 2
 POOL_TARGET = 300  # refill while the shared pool is smaller
 POOL_MAX = 1000  # only links are stored (~200 bytes each); the oldest go beyond this
@@ -94,10 +98,11 @@ def parse_memes(payload: dict[str, Any], source: str) -> list[MemeLink]:
         if meme.get("nsfw") or meme.get("spoiler") or not url.startswith("https://"):
             continue
         path = url.lower().split("?")[0]
+        tag = WEDNESDAY_SOURCE if _WEDNESDAY_TITLE.search(str(meme.get("title") or "")) else source
         if path.endswith(".gif"):
-            links.append(MemeLink("animation", url, source))
+            links.append(MemeLink("animation", url, tag))
         elif path.endswith(IMAGE_EXTENSIONS):
-            links.append(MemeLink("photo", url, source))
+            links.append(MemeLink("photo", url, tag))
     return links
 
 
@@ -130,7 +135,7 @@ class ToadPool:
                 batches = await asyncio.gather(*(fetch_memes(session, s) for s in SUBREDDITS))
             links = [link for batch in batches for link in batch]
             added = await db.add_toad_memes([(link.kind, link.source, link.url) for link in links])
-            await db.prune_toads(date.today(), keep_shared=POOL_MAX)
+            await db.prune_toads(date.today(), keep_shared=POOL_MAX, sources=(*SUBREDDITS, WEDNESDAY_SOURCE))
             log.info("toad pool: +%s memes", added)
             return added
 

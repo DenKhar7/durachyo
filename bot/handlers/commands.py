@@ -2,12 +2,13 @@
 
 import html
 import logging
+from contextlib import suppress
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BufferedInputFile, Message
 
@@ -37,6 +38,7 @@ HELP = (
     "/demotiv или /демотив [текст] - демотиватор (реплаем на фото - из него)\n"
     "/жаба - твоя жаба дня (реплаем - чужая)\n"
     "/жаба добавь - реплаем на картинку: пополнить жабью коллекцию\n"
+    "/нежаба - реплаем на жабу дня: выкинуть, если это не жаба\n"
     "@бот кто насрал? - узнать правду\n"
     "/all - пингануть всех\n"
     "/forgetme - стереть мои сообщения из памяти\n\n"
@@ -145,7 +147,9 @@ async def cmd_toad(message: Message, command: CommandObject, app: App) -> None:
             log.warning("toad meme %s is gone: %s", meme.id, exc)
             await app.db.drop_toad_meme(meme.id)
             continue
-        if file_id := _file_id(sent):
+        for post in sent:
+            await app.db.remember_toad_post(message.chat.id, post.message_id, meme.id, today)
+        if file_id := _file_id(sent[0]):
             await app.db.set_toad_file_id(meme.id, file_id)
         return
     await message.reply("Жабы спят. Попробуй через минуту.")
@@ -173,15 +177,14 @@ def _toad_media(message: Message) -> tuple[str, str, str] | None:
     return None
 
 
-async def _send_toad(message: Message, meme: ToadMeme, caption: str) -> Message:
+async def _send_toad(message: Message, meme: ToadMeme, caption: str) -> list[Message]:
+    """The toad post; a sticker can't carry a caption, so it goes as two messages."""
     media = meme.file_id or meme.url or ""
     if meme.kind == "sticker":
-        sent = await message.answer_sticker(media)
-        await message.answer(caption)
-        return sent
+        return [await message.answer_sticker(media), await message.answer(caption)]
     if meme.kind == "animation":
-        return await message.answer_animation(media, caption=caption)
-    return await message.answer_photo(media, caption=caption)
+        return [await message.answer_animation(media, caption=caption)]
+    return [await message.answer_photo(media, caption=caption)]
 
 
 def _file_id(sent: Message) -> str | None:
@@ -190,6 +193,23 @@ def _file_id(sent: Message) -> str | None:
     if sent.animation:
         return sent.animation.file_id
     return sent.sticker.file_id if sent.sticker else None
+
+
+@router.message(Command("нежаба", "nezhaba", "nottoad"), IN_GROUP)
+async def cmd_not_toad(message: Message, app: App) -> None:
+    """Reply to the bot's toad of the day: that meme is not a toad, never show it again."""
+    replied = message.reply_to_message
+    if replied is None or replied.from_user is None or replied.from_user.id != app.me.id:
+        await message.reply("Ответь /нежаба на жабу дня, которую я прислал.")
+        return
+    meme = await app.db.toad_by_post(message.chat.id, replied.message_id)
+    if meme is None:
+        await message.reply("Не нашёл эту жабу. Она старая или уже выкинута.")
+        return
+    await app.db.ban_toad_meme(meme.id)
+    with suppress(TelegramAPIError):
+        await app.bot.delete_message(message.chat.id, replied.message_id)
+    await message.reply("Выкинул, больше не выпадет. Хозяин жабы может взять новую: /жаба")
 
 
 @router.message(Command("all"), IN_GROUP)
