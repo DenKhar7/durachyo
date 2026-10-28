@@ -1,24 +1,24 @@
-import html
-import random
+"""Commands for everyone in the group."""
 
-from aiogram import Bot, F, Router
+import html
+
+from aiogram import Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BufferedInputFile, Message
 
-from bot.chains import ChainStore
-from bot.config import Settings
-from bot.db import Database, KnownUser
+from bot.app import App
+from bot.db import KnownUser
+from bot.handlers.filters import IN_GROUP
+from bot.media import best_photo, chat_demotivator
 from bot.middlewares import CommandCooldownMiddleware
-from bot.responder import best_photo, chat_demotivator
-from bot.utils import GROUP_TYPES, Cooldown, chunks, mention
+from bot.utils import chunks, mention
 
 router = Router(name="commands")
 router.message.middleware(CommandCooldownMiddleware())
 
-in_group = F.chat.type.in_(GROUP_TYPES)
-_all_cooldown = Cooldown()
 MENTIONS_PER_MESSAGE = 5
+MAX_CAPTION = 120
 
 HELP = (
     "<b>Сглыпа 2.0</b> - запоминаю, что вы пишете, и использую против вас. "
@@ -33,41 +33,29 @@ HELP = (
 )
 
 
-
-async def _resolve_target(message: Message, command: CommandObject, db: Database) -> tuple[KnownUser | None, bool]:
-    """(target, ok). ok=False means an explicit @username was unknown and the user was told so."""
-    for ent in message.entities or ():
-        if ent.type == "text_mention" and ent.user and not ent.user.is_bot:
-            return KnownUser(ent.user.id, ent.user.full_name, ent.user.username), True
-    args = (command.args or "").split()
-    if args and args[0].startswith("@"):
-        user = await db.find_user_by_username(message.chat.id, args[0][1:])
-        if user is None:
-            await message.reply(f"Кто такой {html.escape(args[0])}? Он тут ничего не писал.")
-            return None, False
-        return user, True
-    reply = message.reply_to_message
-    if reply and reply.from_user and not reply.from_user.is_bot and reply.forum_topic_created is None:
-        u = reply.from_user
-        return KnownUser(u.id, u.full_name, u.username), True
-    return None, True
-
-
 @router.message(CommandStart())
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     await message.answer(HELP)
 
 
-@router.message(Command("sglyp"), in_group)
-async def cmd_sglyp(message: Message, command: CommandObject, db: Database, chains: ChainStore) -> None:
-    target, ok = await _resolve_target(message, command, db)
-    if not ok:
-        return
-    seed = next((w for w in (command.args or "").split() if not w.startswith("@")), None)
-    chain = await (chains.for_user(message.chat.id, target.user_id) if target else chains.get(message.chat.id))
-    text = chain.generate(seed) if seed else None
-    text = text or chain.generate()
+@router.message(Command("sglyp"), IN_GROUP)
+async def cmd_sglyp(message: Message, command: CommandObject, app: App) -> None:
+    """Nonsense from the chat. With @user or as a reply: in that person's style. With a word: from it."""
+    args = (command.args or "").split()
+    username = next((a.removeprefix("@") for a in args if a.startswith("@")), None)
+    seed = next((a for a in args if not a.startswith("@")), None)
+    chat_id = message.chat.id
+    if username:
+        target = await app.db.find_user_by_username(chat_id, username)
+        if target is None:
+            await message.reply(f"Кто такой @{html.escape(username)}? Он тут ничего не писал.")
+            return
+    else:
+        target = _target_from_message(message)
+
+    chain = await (app.chains.for_user(chat_id, target.user_id) if target else app.chains.get(chat_id))
+    text = (chain.generate(seed, rng=app.rng) if seed else None) or chain.generate(rng=app.rng)
     if not text:
         await message.reply("Мало данных. Болтайте больше, я учусь.")
         return
@@ -77,35 +65,50 @@ async def cmd_sglyp(message: Message, command: CommandObject, db: Database, chai
     await message.answer(body)
 
 
-@router.message(Command("demotiv", "демотив", "dem", "дем"), in_group)
-async def cmd_demotiv(message: Message, command: CommandObject, bot: Bot, db: Database, chains: ChainStore) -> None:
-    src = message.reply_to_message
-    photo = best_photo(src.photo) if src and src.photo else best_photo(message.photo)
-    seed = (src.text or src.caption or "") if src else ""
-    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_PHOTO, message_thread_id=message.message_thread_id)
-    data = await chat_demotivator(
-        bot,
-        db,
-        await chains.get(message.chat.id),
-        message.chat.id,
-        photo.file_id if photo else None,
-        seed_text=seed,
-        title=(command.args or "").strip()[:120] or None,
-        rng=random.Random(),
+def _target_from_message(message: Message) -> KnownUser | None:
+    """The person picked by a text mention (users without @username) or by replying to them."""
+    for entity in message.entities or ():
+        if entity.type == "text_mention" and entity.user and not entity.user.is_bot:
+            u = entity.user
+            return KnownUser(u.id, u.full_name, u.username)
+    replied = message.reply_to_message
+    if replied and replied.from_user and not replied.from_user.is_bot and replied.forum_topic_created is None:
+        u = replied.from_user
+        return KnownUser(u.id, u.full_name, u.username)
+    return None
+
+
+@router.message(Command("demotiv", "демотив", "dem", "дем"), IN_GROUP)
+async def cmd_demotiv(message: Message, command: CommandObject, app: App) -> None:
+    """Demotivator. As a reply to a photo: from that photo. With text: that text as the caption."""
+    replied = message.reply_to_message
+    photo = best_photo(replied.photo if replied else None) or best_photo(message.photo)
+    await app.bot.send_chat_action(
+        message.chat.id, ChatAction.UPLOAD_PHOTO, message_thread_id=message.message_thread_id
     )
-    if data is None:
+    image = await chat_demotivator(
+        app.bot,
+        app.db,
+        await app.chains.get(message.chat.id),
+        message.chat.id,
+        rng=app.rng,
+        file_id=photo.file_id if photo else None,
+        seed_text=(replied.text or replied.caption or "") if replied else "",
+        title=(command.args or "").strip()[:MAX_CAPTION] or None,
+    )
+    if image is None:
         await message.reply("Нет картинок. Скиньте фото в чат, я запомню.")
         return
-    await message.answer_photo(BufferedInputFile(data, "demotivator.jpg"))
+    await message.answer_photo(BufferedInputFile(image, "demotivator.jpg"))
 
 
-@router.message(Command("all"), in_group)
-async def cmd_all(message: Message, db: Database, settings: Settings) -> None:
-    if not _all_cooldown.ready(message.chat.id, settings.all_cooldown):
+@router.message(Command("all"), IN_GROUP)
+async def cmd_all(message: Message, app: App) -> None:
+    if not app.cooldowns.everyone.ready(message.chat.id):
         await message.reply("Не спамь. Общий сбор раз в несколько минут.")
         return
     caller = message.from_user.id if message.from_user else 0
-    users = [u for u in await db.users(message.chat.id) if u.user_id != caller]
+    users = [u for u in await app.db.users(message.chat.id) if u.user_id != caller]
     if not users:
         await message.reply("Я пока никого не знаю.")
         return
@@ -114,10 +117,10 @@ async def cmd_all(message: Message, db: Database, settings: Settings) -> None:
         await message.answer(prefix + " ".join(mention(u.user_id, u.full_name) for u in part))
 
 
-@router.message(Command("forgetme"), in_group)
-async def cmd_forgetme(message: Message, db: Database, chains: ChainStore) -> None:
+@router.message(Command("forgetme"), IN_GROUP)
+async def cmd_forgetme(message: Message, app: App) -> None:
     if message.from_user is None:
         return
-    deleted = await db.forget_user(message.chat.id, message.from_user.id)
-    chains.invalidate(message.chat.id)
+    deleted = await app.db.forget_user(message.chat.id, message.from_user.id)
+    app.chains.invalidate(message.chat.id)
     await message.reply(f"Забыл {deleted} твоих фраз. Но осадочек остался.")

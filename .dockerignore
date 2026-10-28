@@ -13,6 +13,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .empryo/
+.claude/
+CLAUDE.md
+.ruff_cache/
 .github/
 deploy/
 .idea/

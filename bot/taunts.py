@@ -1,15 +1,55 @@
+"""Text templates for taunts: insults, labels, spongebob case."""
+
 import html
 import random
 
 ADJECTIVES = (
-    "раковый", "токсичный", "криворукий", "безрукий", "лагающий", "донатный", "афкшный",
-    "контуженный", "недоделанный", "протухший", "картонный", "дешёвый", "бракованный",
-    "забаненный", "поехавший", "отбитый", "немытый", "пиксельный", "китайский", "бесплатный",
+    "раковый",
+    "токсичный",
+    "криворукий",
+    "безрукий",
+    "лагающий",
+    "донатный",
+    "афкшный",
+    "контуженный",
+    "недоделанный",
+    "протухший",
+    "картонный",
+    "дешёвый",
+    "бракованный",
+    "забаненный",
+    "поехавший",
+    "отбитый",
+    "немытый",
+    "пиксельный",
+    "китайский",
+    "бесплатный",
 )
 NOUNS = (
-    "нуб", "рак", "бот", "фидер", "школьник", "донатер", "нпс", "тиммейт-балласт", "лоутаб",
-    "чмоня", "лошара", "дегенерат", "клоун", "огрызок", "пельмень", "таракан", "овощ",
-    "мамкин тащер", "крип", "читер", "нубяра", "дед инсайд", "пикми", "кабачок",
+    "нуб",
+    "рак",
+    "бот",
+    "фидер",
+    "школьник",
+    "донатер",
+    "нпс",
+    "тиммейт-балласт",
+    "лоутаб",
+    "чмоня",
+    "лошара",
+    "дегенерат",
+    "клоун",
+    "огрызок",
+    "пельмень",
+    "таракан",
+    "овощ",
+    "мамкин тащер",
+    "крип",
+    "читер",
+    "нубяра",
+    "дед инсайд",
+    "пикми",
+    "кабачок",
 )
 INSULTS = (
     "{name}, ты {adj} {noun}.",
@@ -60,8 +100,9 @@ TAGGED_NO_WORD = (
 )
 
 
-def spongebob(text: str, rng: random.Random | None = None) -> str:
-    upper = (rng or random).random() < 0.5
+def spongebob(text: str, rng: random.Random) -> str:
+    """пОвТоРяЕт С кРиВлЯнИеМ."""
+    upper = rng.random() < 0.5
     out = []
     for ch in text:
         if ch.isalpha():
@@ -72,8 +113,8 @@ def spongebob(text: str, rng: random.Random | None = None) -> str:
     return "".join(out)
 
 
-def insult(name_html: str, word: str | None = None, rng: random.Random | None = None) -> str:
-    rng = rng or random
+def insult(name_html: str, word: str | None, rng: random.Random) -> str:
+    """Stock insult; templates with a chat word are used only when there is a word."""
     templates = INSULTS if word else tuple(t for t in INSULTS if "{word}" not in t)
     return rng.choice(templates).format(
         name=name_html,
@@ -83,15 +124,15 @@ def insult(name_html: str, word: str | None = None, rng: random.Random | None = 
     )
 
 
-def chat_insult(name_html: str, phrase: str, word: str, adj: str, rng: random.Random | None = None) -> str:
+def chat_insult(name_html: str, phrase: str, word: str, adj: str, rng: random.Random) -> str:
     """Insult assembled from the chat's own vocabulary."""
-    return (rng or random).choice(CHAT_INSULTS).format(
+    return rng.choice(CHAT_INSULTS).format(
         name=name_html, phrase=html.escape(phrase), word=html.escape(word), adj=html.escape(adj)
     )
 
 
-def tagged(name: str, tag: str, word: str | None = None, rng: random.Random | None = None) -> str:
-    rng = rng or random
+def tagged(name: str, tag: str, word: str | None, rng: random.Random) -> str:
+    """Reply for a /tag label: «А ну да, Зигор тот ещё ...»."""
     templates = TAGGED if word else TAGGED_NO_WORD
     return rng.choice(templates).format(
         name=html.escape(name), tag=html.escape(tag), word=html.escape(word or "")

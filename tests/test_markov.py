@@ -14,11 +14,11 @@ def make(order: int = 2) -> MarkovChain:
     return chain
 
 
-def test_empty_chain_generates_nothing():
+def test_empty_chain_generates_nothing() -> None:
     assert MarkovChain().generate() is None
 
 
-def test_generates_only_known_words():
+def test_generates_only_known_words() -> None:
     chain, rng = make(), random.Random(1)
     vocab = {w for t in CORPUS for w in t.split()}
     for _ in range(50):
@@ -26,43 +26,45 @@ def test_generates_only_known_words():
         assert out and set(out.split()) <= vocab
 
 
-def test_seeded_generation_contains_seed():
+def test_seeded_generation_contains_seed() -> None:
     chain, rng = make(), random.Random(2)
     for _ in range(20):
         out = chain.generate("Пиво!", rng=rng)
+        assert out is not None
         assert "пиво" in {normalize(w) for w in out.split()}
 
 
-def test_unknown_seed_returns_none():
+def test_unknown_seed_returns_none() -> None:
     assert make().generate("водка") is None
 
 
-def test_max_words_respected():
+def test_max_words_respected() -> None:
     chain = MarkovChain(1)
     chain.add(" ".join(["бла"] * 200))
-    assert len(chain.generate(max_words=10).split()) <= 10
+    out = chain.generate(max_words=10)
+    assert out is not None and len(out.split()) <= 10
 
 
-def test_order_one_mixes_sentences():
+def test_order_one_mixes_sentences() -> None:
     chain, rng = make(order=1), random.Random(3)
     outputs = {chain.generate(rng=rng) for _ in range(200)}
     assert outputs - set(CORPUS)
 
 
-def test_known_and_normalize():
+def test_known_and_normalize() -> None:
     chain = make()
     assert normalize("«Пиво»!!") == "пиво"
     assert chain.known("ПИВО,") and not chain.known("...")
 
 
-def test_frequency_counts_normalized_words():
+def test_frequency_counts_normalized_words() -> None:
     chain = make()
     assert chain.frequency("Я") == 3
     assert chain.frequency("пиво!") == 2
     assert chain.frequency("водка") == 0
 
 
-def test_mix_splices_messages_through_shared_word():
+def test_mix_splices_messages_through_shared_word() -> None:
     corpus = ["я пью пиво дома", "мы пьём пиво на улице"]
     strict, mixed = MarkovChain(2, mix=0.0), MarkovChain(2, mix=1.0)
     for text in corpus:
@@ -75,6 +77,6 @@ def test_mix_splices_messages_through_shared_word():
     assert all(o not in corpus for o in outputs - {None})
 
 
-def test_invalid_order():
+def test_invalid_order() -> None:
     with pytest.raises(ValueError):
         MarkovChain(0)

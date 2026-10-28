@@ -1,13 +1,15 @@
+"""Entry point: wires settings, database, bot and handlers together and starts polling."""
+
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
-from bot.brain import Brain
-from bot.chains import ChainStore
+from bot.app import App
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import admin, collect, commands
@@ -23,6 +25,15 @@ COMMANDS = [
     BotCommand(command="forgetme", description="Забыть мои сообщения"),
     BotCommand(command="help", description="Помощь"),
 ]
+ALLOWED_UPDATES = ["message", "my_chat_member"]
+
+
+def build_dispatcher(app: App) -> Dispatcher:
+    dp = Dispatcher(app=app)
+    dp.update.outer_middleware(WhitelistMiddleware())
+    dp.message.outer_middleware(TrackUsersMiddleware())
+    dp.include_routers(admin.router, commands.router, collect.router)
+    return dp
 
 
 async def main() -> None:
@@ -40,22 +51,18 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
     try:
-        me = await bot.get_me()
-        chains = ChainStore(db, settings.markov_order)
-        brain = Brain()
-        dp = Dispatcher(settings=settings, db=db, chains=chains, brain=brain, bot_me=me)
-        dp.update.outer_middleware(WhitelistMiddleware())
-        dp.message.outer_middleware(TrackUsersMiddleware())
-        dp.include_routers(admin.router, commands.router, collect.router)
-
+        app = App.create(settings, bot, db, await bot.get_me())
+        dp = build_dispatcher(app)
         await bot.set_my_commands(COMMANDS)
         await bot.delete_webhook(drop_pending_updates=True)
-        log.info("Started as @%s (id=%s)", me.username, me.id)
-        revive = asyncio.create_task(revive_loop(bot, db, chains, brain, settings))
+        log.info("Started as @%s (id=%s)", app.me.username, app.me.id)
+        revive = asyncio.create_task(revive_loop(app))
         try:
-            await dp.start_polling(bot, allowed_updates=["message", "my_chat_member"])
+            await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
         finally:
             revive.cancel()
+            with suppress(asyncio.CancelledError):
+                await revive
     finally:
         await bot.session.close()
         await db.close()

@@ -3,59 +3,58 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
-from aiogram import BaseMiddleware, Bot
+from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Chat, Message, TelegramObject, User
 
-from bot.config import Settings
-from bot.db import Database
-from bot.utils import GROUP_TYPES, Cooldown
+from bot.app import App
+from bot.utils import GROUP_TYPES
 
 log = logging.getLogger(__name__)
 
-Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
+type Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
 
 class WhitelistMiddleware(BaseMiddleware):
-    """Drops every update that is not from an allowed group (or an admin's DM) and leaves foreign chats."""
+    """Drops updates from anything but allowed groups and admins' DMs. Leaves foreign groups."""
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
-        settings: Settings = data["settings"]
+        app: App = data["app"]
         chat: Chat | None = data.get("event_chat")
         user: User | None = data.get("event_from_user")
         if chat is None:
             return None
         if chat.type == "private":
-            if user is not None and user.id in settings.admin_ids:
+            if user is not None and user.id in app.settings.admin_ids:
                 return await handler(event, data)
             return None
-        if chat.id in settings.allowed_chat_ids:
+        if chat.id in app.settings.allowed_chat_ids:
             return await handler(event, data)
         log.warning("Foreign chat %s (%r): leaving", chat.id, chat.title)
-        bot: Bot = data["bot"]
         with suppress(TelegramAPIError):
-            await bot.leave_chat(chat.id)
+            await app.bot.leave_chat(chat.id)
         return None
 
 
 class TrackUsersMiddleware(BaseMiddleware):
-    """Remembers everyone who writes, so /all and @username lookups work (Bot API can't list members)."""
+    """Remembers everyone who writes: the Bot API can't list group members, /all needs them."""
 
-    async def __call__(self, handler: Handler, event: Message, data: dict[str, Any]) -> Any:
-        user = event.from_user
-        if user is not None and not user.is_bot and event.chat.type in GROUP_TYPES:
-            db: Database = data["db"]
-            await db.upsert_user(event.chat.id, user.id, user.full_name, user.username)
+    async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
+        if isinstance(event, Message) and event.chat.type in GROUP_TYPES:
+            user = event.from_user
+            if user is not None and not user.is_bot:
+                app: App = data["app"]
+                await app.db.upsert_user(event.chat.id, user.id, user.full_name, user.username)
         return await handler(event, data)
 
 
 class CommandCooldownMiddleware(BaseMiddleware):
-    def __init__(self) -> None:
-        self._cooldown = Cooldown()
+    """Per-user flood guard for commands, shared by all command routers."""
 
-    async def __call__(self, handler: Handler, event: Message, data: dict[str, Any]) -> Any:
-        settings: Settings = data["settings"]
-        key = (event.chat.id, event.from_user.id if event.from_user else 0)
-        if not self._cooldown.ready(key, settings.command_cooldown):
-            return None
+    async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
+        if isinstance(event, Message):
+            app: App = data["app"]
+            user_id = event.from_user.id if event.from_user else 0
+            if not app.cooldowns.command.ready((event.chat.id, user_id)):
+                return None
         return await handler(event, data)

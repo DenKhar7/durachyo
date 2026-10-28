@@ -1,14 +1,7 @@
 import random
 
 from bot.brain import Brain, analyze
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.t = 1000.0
-
-    def __call__(self) -> float:
-        return self.t
+from tests.helpers import FakeClock
 
 
 def chatter(brain: Brain, n: int) -> None:
@@ -16,20 +9,20 @@ def chatter(brain: Brain, n: int) -> None:
         brain.observe(-1)
 
 
-def test_analyze():
+def test_analyze() -> None:
     ctx = analyze("ЧТО ЗА ДИЧЬ?")
     assert ctx.question and ctx.shouting and ctx.words == 3
     assert not analyze("ок").shouting
 
 
-def test_addressed_always_and_zero_mutes():
+def test_addressed_always_and_zero_mutes() -> None:
     brain = Brain()
     chatter(brain, 1)
     assert brain.reply_probability(-1, analyze("эй", addressed=True), 0) == 100
     assert brain.reply_probability(-1, analyze("обычный текст тут"), 0) == 0
 
 
-def test_backs_off_after_speaking_and_warms_up_in_silence():
+def test_backs_off_after_speaking_and_warms_up_in_silence() -> None:
     brain = Brain()
     ctx = analyze("ну и что мы будем делать вечером")
     brain.spoke(-1)
@@ -40,7 +33,7 @@ def test_backs_off_after_speaking_and_warms_up_in_silence():
     assert right_after < 20 < later
 
 
-def test_tags_and_questions_raise_interest():
+def test_tags_and_questions_raise_interest() -> None:
     brain = Brain()
     chatter(brain, 5)
     plain = brain.reply_probability(-1, analyze("пошли в доту сегодня"), 30)
@@ -48,16 +41,16 @@ def test_tags_and_questions_raise_interest():
     assert brain.reply_probability(-1, analyze("пошли в доту сегодня", tagged=True), 30) > plain
 
 
-def test_should_reply_is_random_but_bounded():
+def test_should_reply_is_random_but_bounded() -> None:
     brain = Brain()
     chatter(brain, 5)
     rng = random.Random(0)
-    hits = sum(brain.should_reply(-1, analyze("какой-то средний текст"), 40, rng) for _ in range(1000))
+    hits = sum(brain.should_reply(-1, analyze("какой-то средний текст"), 40, rng=rng) for _ in range(1000))
     assert 250 < hits < 550
 
 
-def test_needs_revive_once_per_silence():
-    clock = Clock()
+def test_needs_revive_once_per_silence() -> None:
+    clock = FakeClock()
     brain = Brain(clock)
     assert not brain.needs_revive(-1, 3600)
     brain.observe(-1)
@@ -71,14 +64,16 @@ def test_needs_revive_once_per_silence():
     assert not brain.needs_revive(-1, 0)
 
 
-def test_called_chance_and_media_skip_word_penalty():
+def test_called_chance_and_media_skip_word_penalty() -> None:
     brain = Brain()
     chatter(brain, 5)
     assert brain.reply_probability(-1, analyze("сглыпа", addressed=True), 40, called_chance=80) == 80
-    assert brain.reply_probability(-1, analyze("", media="sticker"), 40) > brain.reply_probability(-1, analyze(""), 40)
+    assert brain.reply_probability(-1, analyze("", media="sticker"), 40) > brain.reply_probability(
+        -1, analyze(""), 40
+    )
 
 
-def test_memory_of_recent_and_own_lines():
+def test_memory_of_recent_and_own_lines() -> None:
     brain = Brain()
     state = brain.observe(-1, "привет")
     brain.observe(-1)

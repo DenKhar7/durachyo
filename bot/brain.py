@@ -49,8 +49,11 @@ def analyze(
 
 
 class Brain:
-    """Decides on its own when to speak: reacts to what's said and how lively the chat is,
-    backs off right after talking, gets chattier when it has been quiet for a while."""
+    """Decides when to speak.
+
+    Reacts to what was said and how lively the chat is, backs off right after talking,
+    gets chattier when it has been quiet for a while.
+    """
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
@@ -77,7 +80,8 @@ class Brain:
         if plain:
             s.recent_bot.append(plain.strip().lower())
 
-    def reply_probability(self, chat_id: int, ctx: Context, base: int, called_chance: int = 100) -> float:
+    def reply_probability(self, chat_id: int, ctx: Context, base: int, *, called_chance: int = 100) -> float:
+        """Chance in % to answer this message. base is the chat's /chance."""
         if ctx.addressed:
             return float(called_chance)
         if base <= 0:
@@ -104,11 +108,13 @@ class Brain:
         return max(0.0, min(100.0, p))
 
     def should_reply(
-        self, chat_id: int, ctx: Context, base: int, called_chance: int = 100, rng: random.Random | None = None
+        self, chat_id: int, ctx: Context, base: int, *, called_chance: int = 100, rng: random.Random
     ) -> bool:
-        return (rng or random).random() * 100 < self.reply_probability(chat_id, ctx, base, called_chance)
+        p = self.reply_probability(chat_id, ctx, base, called_chance=called_chance)
+        return rng.random() * 100 < p
 
     def needs_revive(self, chat_id: int, idle_seconds: float) -> bool:
+        """The chat has been silent for idle_seconds and the bot hasn't broken this silence yet."""
         s = self._chats.get(chat_id)
         if idle_seconds <= 0 or s is None or not s.last_activity:
             return False

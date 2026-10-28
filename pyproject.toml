@@ -6,3 +6,48 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["--strict-markers", "--strict-config"]
+
+[tool.coverage.run]
+source = ["bot"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if __name__ == .__main__.:"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "PIE", "RET", "SIM", "PTH", "ARG",
+    "ASYNC", "S", "T20", "PERF", "PGH", "ERA", "LOG", "G", "ISC", "TID", "RUF", "FURB", "PL",
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # кириллица в строках и комментариях - это норма для проекта
+    "S311",                        # random здесь для шуток, не для криптографии
+    "PLR2004",                     # числа-пороги в эвристиках читаются лучше как есть
+    "PLR0913",                     # хендлеры aiogram получают зависимости аргументами
+    "ISC001",                      # конфликтует с ruff format
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ARG"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+exclude = ["^data/"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false

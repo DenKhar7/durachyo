@@ -10,7 +10,10 @@ FONTS = (
 MAX_SIDE = 800
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+type Font = ImageFont.FreeTypeFont | ImageFont.ImageFont
+
+
+def _font(size: int) -> Font:
     for path in FONTS:
         try:
             return ImageFont.truetype(path, size)
@@ -19,7 +22,8 @@ def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default(size)
 
 
-def _wrap(text: str, font, width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+def _wrap(text: str, font: Font, width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+    """Greedy word wrap to width pixels, at most 4 lines."""
     lines: list[str] = []
     line = ""
     for word in text.split():

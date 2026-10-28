@@ -30,6 +30,8 @@ dist/
 
 # редакторы, ОС, инструменты
 .empryo/
+.claude/settings.local.json
+.ruff_cache/
 .idea/
 .vscode/
 *.swp

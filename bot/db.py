@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,14 @@ _BEFORE_RECENT = "id <= (SELECT id FROM messages WHERE chat_id = ? ORDER BY id D
 
 
 def _lower(value: str | None) -> str | None:
+    """SQLite's lower() only knows ASCII; this one lowers Cyrillic too."""
     return value.lower() if value is not None else None
+
+
+def _escape_like(value: str) -> str:
+    """Makes % and _ in user text literal for LIKE ... ESCAPE '!'."""
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS messages (
@@ -111,12 +119,12 @@ class Database:
         await self._conn.commit()
 
     async def texts(self, chat_id: int, user_id: int | None = None) -> list[str]:
-        if user_id is None:
-            query, args = "SELECT text FROM messages WHERE chat_id = ? ORDER BY id", (chat_id,)
-        else:
-            query = "SELECT text FROM messages WHERE chat_id = ? AND user_id = ? ORDER BY id"
-            args = (chat_id, user_id)
-        async with self._conn.execute(query, args) as cur:
+        query = "SELECT text FROM messages WHERE chat_id = ?"
+        args: list[object] = [chat_id]
+        if user_id is not None:
+            query += " AND user_id = ?"
+            args.append(user_id)
+        async with self._conn.execute(query + " ORDER BY id", args) as cur:
             return [row[0] for row in await cur.fetchall()]
 
     async def old_phrase(
@@ -128,29 +136,38 @@ class Database:
         min_words: int = 2,
         max_words: int = 12,
     ) -> str | None:
-        """Random message older than the newest skip_recent ones; optionally containing word (case-insensitive)."""
-        query = f"SELECT text FROM messages WHERE chat_id = ? AND {_BEFORE_RECENT} AND {_SPACES} BETWEEN ? AND ?"
-        args: list = [chat_id, chat_id, skip_recent, min_words - 1, max_words - 1]
+        """Random message older than the newest skip_recent ones.
+
+        With word: only messages containing it, case-insensitive.
+        """
+        # only module constants are interpolated, user values go through ? placeholders
+        query = (
+            f"SELECT text FROM messages WHERE chat_id = ? AND {_BEFORE_RECENT} AND {_SPACES} BETWEEN ? AND ?"  # noqa: S608
+        )
+        args: list[object] = [chat_id, chat_id, skip_recent, min_words - 1, max_words - 1]
         if word:
-            query += " AND pylower(text) LIKE ?"
-            args.append(f"%{word.lower().replace('_', '')}%")
+            query += " AND pylower(text) LIKE ? ESCAPE '!'"
+            args.append(f"%{_escape_like(word.lower())}%")
         async with self._conn.execute(query + " ORDER BY RANDOM() LIMIT 1", args) as cur:
             row = await cur.fetchone()
         return row[0] if row else None
 
-    async def short_phrases(self, chat_id: int, limit: int = 150, min_count: int = 2) -> list[tuple[str, int]]:
+    async def short_phrases(
+        self, chat_id: int, limit: int = 150, min_count: int = 2
+    ) -> list[tuple[str, int]]:
         """The chat's own go-to replies: messages of up to 3 words that people keep repeating."""
         async with self._conn.execute(
             f"""SELECT pylower(trim(text)) AS t, COUNT(*) AS n FROM messages
                 WHERE chat_id = ? AND length(text) <= 30 AND {_SPACES} <= 2
-                GROUP BY t HAVING n >= ? ORDER BY n DESC LIMIT ?""",
+                GROUP BY t HAVING n >= ? ORDER BY n DESC LIMIT ?""",  # noqa: S608
             (chat_id, min_count, limit),
         ) as cur:
             return [(row[0], row[1]) for row in await cur.fetchall()]
 
     async def add_media(
-        self, chat_id: int, kind: str, uid: str, file_id: str, emoji: str | None = None, keep: int = 500
+        self, chat_id: int, kind: str, uid: str, file_id: str, *, emoji: str | None = None, keep: int = 500
     ) -> None:
+        """Remembers a sticker/gif/photo by its unique id, keeping the newest keep of each kind."""
         await self._conn.execute(
             """INSERT INTO media (chat_id, kind, uid, file_id, emoji) VALUES (?, ?, ?, ?, ?)
                ON CONFLICT (chat_id, uid) DO UPDATE SET file_id = excluded.file_id""",
@@ -166,7 +183,8 @@ class Database:
 
     async def random_media(self, chat_id: int, kind: str) -> str | None:
         async with self._conn.execute(
-            "SELECT file_id FROM media WHERE chat_id = ? AND kind = ? ORDER BY RANDOM() LIMIT 1", (chat_id, kind)
+            "SELECT file_id FROM media WHERE chat_id = ? AND kind = ? ORDER BY RANDOM() LIMIT 1",
+            (chat_id, kind),
         ) as cur:
             row = await cur.fetchone()
         return row[0] if row else None
@@ -192,7 +210,7 @@ class Database:
                 ON CONFLICT (chat_id, user_id) DO UPDATE SET
                     full_name = excluded.full_name,
                     username  = excluded.username,
-                    last_seen = excluded.last_seen""",
+                    last_seen = excluded.last_seen""",  # noqa: S608
             (chat_id, user_id, full_name, username),
         )
         await self._conn.commit()
@@ -205,7 +223,8 @@ class Database:
 
     async def find_user_by_username(self, chat_id: int, username: str) -> KnownUser | None:
         return await self._one_user(
-            "SELECT user_id, full_name, username FROM users WHERE chat_id = ? AND username = ? COLLATE NOCASE",
+            "SELECT user_id, full_name, username FROM users"
+            " WHERE chat_id = ? AND username = ? COLLATE NOCASE",
             (chat_id, username),
         )
 
@@ -253,7 +272,7 @@ class Database:
             (chat_id, chat_id),
         ) as cur:
             row = await cur.fetchone()
-        return row[0], row[1]
+        return (row[0], row[1]) if row else (0, 0)
 
     async def set_tag(self, chat_id: int, key: str, name: str, label: str) -> None:
         await self._conn.execute(
@@ -274,7 +293,7 @@ class Database:
         ) as cur:
             return [Tag(*row) for row in await cur.fetchall()]
 
-    async def _one_user(self, query: str, args: tuple) -> KnownUser | None:
+    async def _one_user(self, query: str, args: Sequence[object]) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:
             row = await cur.fetchone()
         return KnownUser(*row) if row else None

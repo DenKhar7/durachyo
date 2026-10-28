@@ -2,8 +2,26 @@ import random
 import re
 
 BASE_SHORT = (
-    "ахахах", "ахахахах", "ахахахаха", "бля", "да", "го", "пон", "жиза", "база", "ну такое",
-    "чё", "ага", "сука", "пиздец", "😂", "🗿", "🙂", "😐", "💀", "😈",
+    "ахахах",
+    "ахахахах",
+    "ахахахаха",
+    "бля",
+    "да",
+    "го",
+    "пон",
+    "жиза",
+    "база",
+    "ну такое",
+    "чё",
+    "ага",
+    "сука",
+    "пиздец",
+    "😂",
+    "🗿",
+    "🙂",
+    "😐",
+    "💀",
+    "😈",
 )
 LAUGHS = ("ахахах", "ахахахах", "АХАХАХАХ", "😂", "хД", "бля ахаха")
 EMOJIS = ("😂", "🗿", "💀", "🙂", "😐", "😈", "🤡", "🐸")
@@ -18,7 +36,10 @@ def is_laugh(text: str | None, sticker_emoji: str | None = None) -> bool:
 
 
 def casual(text: str, rng: random.Random, *, verbatim: bool = False) -> str:
-    """Chat voice: no trailing period, sometimes lowercase, rare хД or emoji. verbatim keeps the phrase as people wrote it."""
+    """Chat voice: no trailing period, sometimes lowercase, rare хД or emoji.
+
+    verbatim=True keeps the phrase exactly as people wrote it, only the period goes.
+    """
     t = " ".join(text.split())
     if t.endswith(".") and not t.endswith(".."):
         t = t[:-1]

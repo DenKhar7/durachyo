@@ -6,7 +6,8 @@ START = "\x02"
 END = "\x03"
 _NON_WORD = re.compile(r"[^\w]+")
 
-State = tuple[str, ...]
+type State = tuple[str, ...]
+_RNG = random.Random()
 
 
 def normalize(word: str) -> str:
@@ -66,7 +67,7 @@ class MarkovChain:
     def random_word(self, rng: random.Random | None = None) -> str | None:
         if not self._index:
             return None
-        return (rng or random).choice(tuple(self._index))
+        return (rng or _RNG).choice(tuple(self._index))
 
     def generate(
         self,
@@ -77,9 +78,12 @@ class MarkovChain:
         allow_copy: bool = True,
         rng: random.Random | None = None,
     ) -> str | None:
-        """Random walk. Prefers results that are not verbatim copies of a stored message;
-        with allow_copy=False never returns one."""
-        rng = rng or random
+        """Random walk, from seed if given.
+
+        Prefers results that are not verbatim copies of a stored message; with allow_copy=False
+        never returns one.
+        """
+        rng = rng or _RNG
         fallback: str | None = None
         for _ in range(tries):
             text = self._walk(seed, max_words, rng)

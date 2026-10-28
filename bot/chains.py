@@ -3,8 +3,10 @@ from bot.markov import MarkovChain
 
 
 class ChainStore:
-    """In-memory chain per chat, lazily loaded from the DB and rebuilt periodically
-    so messages trimmed from the DB eventually disappear from the model too."""
+    """In-memory chain per chat, loaded from the DB on first use.
+
+    Rebuilt every rebuild_every new messages, so messages trimmed from the DB leave the model too.
+    """
 
     def __init__(self, db: Database, order: int, rebuild_every: int = 500) -> None:
         self._db = db

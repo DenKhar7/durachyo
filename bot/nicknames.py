@@ -2,6 +2,7 @@ import random
 import re
 from dataclasses import dataclass
 
+from bot.db import Tag
 from bot.markov import normalize
 
 PIG = ("свинья", "псина")
@@ -29,16 +30,33 @@ def _p(regex: str) -> re.Pattern[str]:
 
 
 NICKS = (
-    Nick("Маша", _p(r"маш(?:а|и|е|у|ей|ею|ка|ки|ке|ку|кой|енька|еньки|еньку|уля|ули|улю|улей)?|мань(?:ка|ки|ку|кой)|маня"), PIG, "-", DIRTY_REACTIONS),
+    Nick(
+        "Маша",
+        _p(
+            r"маш(?:а|и|е|у|ей|ею|ка|ки|ке|ку|кой|енька|еньки|еньку|уля|ули|улю|улей)?|мань(?:ка|ки|ку|кой)|маня"
+        ),
+        PIG,
+        "-",
+        DIRTY_REACTIONS,
+    ),
     Nick("Лесон", _p(r"лесон(?:а|у|ом|е|ы|чик|чика|ушка|ушку|ыч)?"), PIG, "-", DIRTY_REACTIONS),
-    Nick("Денис", _p(r"денис(?:а|у|ом|е|ы|ка|ки|ку|кой|очка|очку|ик|ика|ыч)?|ден(?:чик|чика|я|ю|ей)"), PIG, "-", DIRTY_REACTIONS),
+    Nick(
+        "Денис",
+        _p(r"денис(?:а|у|ом|е|ы|ка|ки|ку|кой|очка|очку|ик|ика|ыч)?|ден(?:чик|чика|я|ю|ей)"),
+        PIG,
+        "-",
+        DIRTY_REACTIONS,
+    ),
     Nick("Егор", _p(r"ег[оа]р(?:а|у|ом|е|ы|ка|ки|ку|кой|ушка|ушку|ик|ика|чик|ыч|ов|ам)?"), PEDO, "="),
     Nick(None, _p(r"(?P<base>зиг(?:[ао]г)?[оа]р)(?:а|у|ом|е|ы|ка|ик|чик|ыч)?"), PEDO, "="),
 )
 
 
 def find_nick(text: str) -> NickHit | None:
-    """display=None keeps the name the way it was written (Зигор, Зигагор, Зигогор), without the case ending."""
+    """First crew name in the text.
+
+    Nick.display=None keeps the name as written (Зигор, Зигагор, Зигогор) minus the case ending.
+    """
     for word in text.split():
         key = normalize(word)
         for nick in NICKS:
@@ -51,3 +69,13 @@ def find_nick(text: str) -> NickHit | None:
 
 def nick_line(hit: NickHit, rng: random.Random) -> str:
     return f"{hit.name} {hit.nick.sep} {rng.choice(hit.nick.labels)}"
+
+
+def find_tag(text: str, tags: list[Tag]) -> Tag | None:
+    """A /tag label whose name appears in the text, allowing short Russian endings (Егор -> Егора, Егору)."""
+    words = [normalize(w) for w in text.split()]
+    for tag in tags:
+        for w in words:
+            if w.startswith(tag.key) and len(w) - len(tag.key) <= 3:
+                return tag
+    return None

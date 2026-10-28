@@ -1,344 +1,263 @@
-import asyncio
+"""What to say once the bot decided to speak: picks a reply mode by context and builds the reply."""
+
 import html
-import logging
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import Self
 
-from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import Message, PhotoSize
+from aiogram.types import Message
 
-from bot import mock, voice
+from bot import taunts, voice
+from bot.app import App
 from bot.brain import ChatState, Context
-from bot.chains import ChainStore
-from bot.config import Settings
-from bot.db import Database, Tag
-from bot.demotivator import make_demotivator
-from bot.markov import MarkovChain, normalize
+from bot.db import Tag
+from bot.markov import MarkovChain
+from bot.media import MediaKind, best_photo, chat_demotivator
+from bot.phrases import pick_phrase
 from bot.utils import mention
+from bot.wordplay import make_insult, rare_words, spice
 
-log = logging.getLogger(__name__)
-
-SPICE_CHANCE = 0.2
 MARKOV_LENGTHS = (3, 4, 5, 6, 8, 12)
 PING_SUFFIXES = ("подтверди", "а ты что скажешь?", "скажи им", "я прав?", "ну скажи же", "ты же в теме")
-FALLBACK = ("phrase", "markov", "short")
-_VOWELS = set("аеёиоуыэюяaeiouy")
+ON_TOPIC_CHANCE = 0.6  # old phrase picked by a word from the message, not at random
+CATCHPHRASE_CHANCE = 0.3
+CHAT_SHORT_CHANCE = 0.75  # short reply from the chat's own repeats, not from the built-in set
+ECHO_FRESH = 8  # how many latest messages the parrot looks at
+ECHO_GLUE_CHANCE = 0.3
+GIF_CHANCE = 0.25
 
 
-def blend(a: str, b: str) -> str:
-    """Glues the head of one word to the tail of another at a vowel: пидорства + база -> пидаза."""
-    cut_a = next((i + 1 for i in range(len(a) // 2, len(a)) if a[i] in _VOWELS), len(a) // 2 + 1)
-    cut_b = next((i for i in range(len(b) // 2, 0, -1) if b[i] in _VOWELS), len(b) // 2)
-    return a[:cut_a] + b[cut_b:]
+class ReplyMode(StrEnum):
+    PHRASE = "phrase"  # an old phrase from the chat, said as its own
+    SHORT = "short"  # «го», «база», «ахахах»: what the chat itself says most
+    MARKOV = "markov"  # nonsense generated from chat words
+    ECHO = "echo"  # parrots a fresh message, sometimes glued to another phrase
+    HIT = "hit"  # own lines that made people laugh before
+    STICKER = "sticker"
+    DEMOTIVATOR = "demotivator"
+    INSULT = "insult"
+    SPONGE = "sponge"  # кРиВлЯнИе
+    TAG = "tag"
+    NICK = "nick"
+    WHO = "who"
+    BURST = "burst"
 
 
-def spice(text: str, chain: MarkovChain, rng: random.Random) -> str:
-    """Sometimes swaps one word for a mash-up of two chat words."""
-    words = text.split()
-    slots = [i for i, w in enumerate(words) if len(w) >= 4 and w.isalpha()]
-    vocab = [w for w in chain.vocabulary() if len(w) >= 4 and w.isalpha()]
-    if not slots or len(vocab) < 2 or rng.random() >= SPICE_CHANCE:
-        return text
-    i = rng.choice(slots)
-    other = rng.choice([w for w in vocab if w != words[i].lower()] or vocab)
-    words[i] = blend(words[i], other) if rng.random() < 0.5 else blend(other, words[i])
-    return " ".join(words)
-
-
-ADJ_ENDINGS = ("ый", "ий", "ой", "ая", "яя", "ое", "ее", "ые", "ие")
-
-
-def make_insult(name_html: str, chain: MarkovChain, rng: random.Random, chat_share: float = 0.8) -> str:
-    """Mostly built from chat words; sometimes falls back to the stock insults."""
-    vocab = [w for w in chain.vocabulary() if 3 <= len(w) <= 16 and not w.isdigit()]
-    phrase = chain.generate(rng.choice(vocab), max_words=6, rng=rng) if vocab else None
-    if not vocab or not phrase or rng.random() >= chat_share:
-        return mock.insult(name_html, rng.choice(vocab) if vocab else None, rng)
-    adjectives = [w for w in vocab if len(w) >= 5 and w.endswith(ADJ_ENDINGS)]
-    adj = rng.choice(adjectives) if adjectives else rng.choice(mock.ADJECTIVES)
-    nouns = [w for w in vocab if len(w) >= 4 and w not in adjectives]
-    word = rng.choice(nouns or vocab)
-    return mock.chat_insult(name_html, phrase, word, adj, rng)
-
-
-def find_tag(text: str, tags: list[Tag]) -> Tag | None:
-    """A tag whose word appears in the text, allowing short Russian endings (Егор -> Егора, Егору)."""
-    words = [normalize(w) for w in text.split()]
-    for tag in tags:
-        for w in words:
-            if w.startswith(tag.key) and len(w) - len(tag.key) <= 3:
-                return tag
-    return None
+# Base share of each mode, tuned on the old bot's chat history. mode_weights() shifts it by context.
+BASE_WEIGHTS: dict[ReplyMode, int] = {
+    ReplyMode.PHRASE: 35,
+    ReplyMode.SHORT: 25,
+    ReplyMode.MARKOV: 20,
+    ReplyMode.DEMOTIVATOR: 10,
+    ReplyMode.ECHO: 8,
+    ReplyMode.HIT: 6,
+    ReplyMode.STICKER: 5,
+    ReplyMode.INSULT: 3,
+    ReplyMode.SPONGE: 1,
+}
+FALLBACK = (ReplyMode.PHRASE, ReplyMode.MARKOV, ReplyMode.SHORT)
 
 
 @dataclass(slots=True)
 class Reply:
+    """One outgoing message: HTML text, a sticker, a gif or a rendered photo."""
+
+    mode: ReplyMode
     text: str | None = None
+    plain: str | None = None  # the text as people see it; remembered so the bot doesn't repeat itself
     sticker: str | None = None
     animation: str | None = None
     photo: bytes | None = None
-    plain: str | None = None
-    mode: str = ""
+
+    @classmethod
+    def say(cls, plain: str, mode: ReplyMode) -> Self:
+        return cls(mode, text=html.escape(plain), plain=plain)
 
 
 @dataclass(slots=True)
 class Turn:
+    """Everything a reply mode looks at."""
+
     message: Message
     text: str
     ctx: Context
     chain: MarkovChain
-    db: Database
     state: ChatState
-    settings: Settings
-    bot: Bot
-    rng: random.Random
+    app: App
 
     @property
     def chat_id(self) -> int:
         return self.message.chat.id
 
+    @property
+    def rng(self) -> random.Random:
+        return self.app.rng
+
+    def avoid(self) -> set[str]:
+        """Lines not worth saying now: the bot's own recent ones and the message itself."""
+        return {*self.state.recent_bot, self.text.strip().lower()}
+
     def fresh(self, plain: str) -> bool:
-        lo = plain.strip().lower()
-        return bool(lo) and lo != self.text.strip().lower() and lo not in self.state.recent_bot
-
-
-def _say(plain: str, mode: str) -> Reply:
-    return Reply(text=html.escape(plain), plain=plain, mode=mode)
-
-
-def best_photo(sizes: list[PhotoSize] | None, max_side: int = 1280) -> PhotoSize | None:
-    if not sizes:
-        return None
-    fitting = [p for p in sizes if max(p.width, p.height) <= max_side]
-    return (fitting or sizes)[-1]
-
-
-def rare_words(text: str, chain: MarkovChain, rng: random.Random, n: int = 3) -> list[str]:
-    unique = {normalize(w) for w in text.split() if len(normalize(w)) >= 4 and chain.known(w)}
-    return sorted(unique, key=lambda k: (chain.frequency(k), rng.random()))[:n]
-
-
-async def phrase_skip(db: Database, chat_id: int) -> int:
-    """How many newest messages are too fresh to be repeated: a phrase only lands once people forgot it."""
-    total, _ = await db.stats(chat_id)
-    return min(300, max(20, total // 4))
-
-
-async def pick_phrase(
-    db: Database,
-    chat_id: int,
-    words: list[str] | tuple[str, ...] = (),
-    avoid: set[str] | frozenset[str] = frozenset(),
-    max_words: int = 12,
-) -> str | None:
-    skip = await phrase_skip(db, chat_id)
-    for word in words:
-        p = await db.old_phrase(chat_id, skip, word=word, max_words=max_words)
-        if p and p.strip().lower() not in avoid:
-            return p
-    for _ in range(3):
-        p = await db.old_phrase(chat_id, skip, max_words=max_words)
-        if p and p.strip().lower() not in avoid:
-            return p
-    return None
-
-
-def _avoid(t: Turn) -> set[str]:
-    return set(t.state.recent_bot) | {t.text.strip().lower()}
+        lowered = plain.strip().lower()
+        return bool(lowered) and lowered not in self.avoid()
 
 
 async def _phrase(t: Turn) -> Reply | None:
-    """An old phrase of anyone in the chat, said as its own. Related to the message when possible."""
-    words = rare_words(t.text, t.chain, t.rng) if t.rng.random() < 0.6 else []
-    p = await pick_phrase(t.db, t.chat_id, words, _avoid(t))
-    return _say(voice.casual(p, t.rng, verbatim=True), "phrase") if p else None
+    words = rare_words(t.text, t.chain, t.rng) if t.rng.random() < ON_TOPIC_CHANCE else []
+    phrase = await pick_phrase(t.app.db, t.chat_id, words, t.avoid())
+    return Reply.say(voice.casual(phrase, t.rng, verbatim=True), ReplyMode.PHRASE) if phrase else None
 
 
-async def _short(t: Turn) -> Reply | None:
-    if t.settings.catchphrases and t.rng.random() < 0.3:
-        return _say(t.rng.choice(t.settings.catchphrases), "short")
-    pool = [(p, n) for p, n in await t.db.short_phrases(t.chat_id) if t.fresh(p)]
-    if pool and t.rng.random() < 0.75:
-        texts, counts = zip(*pool)
-        return _say(t.rng.choices(texts, weights=counts)[0], "short")
-    return _say(t.rng.choice(voice.BASE_SHORT), "short")
+async def _short(t: Turn) -> Reply:
+    catchphrases = t.app.settings.catchphrases
+    if catchphrases and t.rng.random() < CATCHPHRASE_CHANCE:
+        return Reply.say(t.rng.choice(catchphrases), ReplyMode.SHORT)
+    pool = [(text, n) for text, n in await t.app.db.short_phrases(t.chat_id) if t.fresh(text)]
+    if pool and t.rng.random() < CHAT_SHORT_CHANCE:
+        texts, counts = zip(*pool, strict=True)
+        return Reply.say(t.rng.choices(texts, weights=counts)[0], ReplyMode.SHORT)
+    return Reply.say(t.rng.choice(voice.BASE_SHORT), ReplyMode.SHORT)
 
 
 async def _markov(t: Turn) -> Reply | None:
-    n = t.rng.choice(MARKOV_LENGTHS)
-    seeds = [*rare_words(t.text, t.chain, t.rng), None]
-    for seed in seeds:
-        out = t.chain.generate(seed, max_words=n, allow_copy=False, rng=t.rng)
+    length = t.rng.choice(MARKOV_LENGTHS)
+    for seed in [*rare_words(t.text, t.chain, t.rng), None]:
+        out = t.chain.generate(seed, max_words=length, allow_copy=False, rng=t.rng)
         if out and t.fresh(out):
-            return _say(voice.casual(spice(out, t.chain, t.rng), t.rng), "markov")
+            return Reply.say(voice.casual(spice(out, t.chain, t.rng), t.rng), ReplyMode.MARKOV)
     return None
 
 
 async def _echo(t: Turn) -> Reply | None:
-    """Parrots something said a moment ago, sometimes glued to another phrase like the old bot did."""
-    candidates = [x for x in list(t.state.recent)[-8:] if len(x.split()) <= 8 and t.fresh(x)]
+    candidates = [x for x in list(t.state.recent)[-ECHO_FRESH:] if len(x.split()) <= 8 and t.fresh(x)]
     if not candidates:
         return None
-    p = t.rng.choice(candidates)
-    if t.rng.random() < 0.3:
-        tail = await pick_phrase(t.db, t.chat_id, max_words=5) or t.rng.choice(voice.BASE_SHORT)
-        p = p + tail[:1].upper() + tail[1:] if t.rng.random() < 0.5 else f"{p} {tail}"
-    return _say(p, "echo")
+    line = t.rng.choice(candidates)
+    if t.rng.random() < ECHO_GLUE_CHANCE:
+        tail = await pick_phrase(t.app.db, t.chat_id, max_words=5) or t.rng.choice(voice.BASE_SHORT)
+        # the old bot glued phrases without a space: «Сгныпена ебанаДа это да»
+        line = line + tail[:1].upper() + tail[1:] if t.rng.random() < 0.5 else f"{line} {tail}"
+    return Reply.say(line, ReplyMode.ECHO)
 
 
 async def _hit(t: Turn) -> Reply | None:
-    """Its own lines that made people laugh before: catchphrases grow out of these."""
-    hits = [(x, s) for x, s in await t.db.hits(t.chat_id) if t.fresh(x)]
+    hits = [(text, score) for text, score in await t.app.db.hits(t.chat_id) if t.fresh(text)]
     if not hits:
         return None
-    texts, scores = zip(*hits)
-    return _say(t.rng.choices(texts, weights=scores)[0], "hit")
+    texts, scores = zip(*hits, strict=True)
+    return Reply.say(t.rng.choices(texts, weights=scores)[0], ReplyMode.HIT)
 
 
 async def _sticker(t: Turn) -> Reply | None:
-    if t.rng.random() < 0.25:
-        gif = await t.db.random_media(t.chat_id, "animation")
-        if gif:
-            return Reply(animation=gif, mode="sticker")
-    sticker = await t.db.random_media(t.chat_id, "sticker")
-    return Reply(sticker=sticker, mode="sticker") if sticker else None
-
-
-async def chat_demotivator(
-    bot: Bot,
-    db: Database,
-    chain: MarkovChain,
-    chat_id: int,
-    file_id: str | None = None,
-    *,
-    seed_text: str = "",
-    title: str | None = None,
-    avoid: set[str] | frozenset[str] = frozenset(),
-    rng: random.Random | None = None,
-) -> bytes | None:
-    """Demotivator from a chat photo (given or random remembered one) captioned with the chat's own words."""
-    rng = rng or random.Random()
-    file_id = file_id or await db.random_media(chat_id, "photo")
-    if not file_id:
-        return None
-    if not title:
-        title = await pick_phrase(db, chat_id, rare_words(seed_text, chain, rng), avoid, max_words=8)
-        title = title or chain.generate(max_words=6, rng=rng)
-    if not title:
-        return None
-    subtitle = chain.generate(max_words=6, rng=rng) if rng.random() < 0.5 else None
-    try:
-        data = (await bot.download(file_id)).read()
-        return await asyncio.to_thread(make_demotivator, data, title, subtitle)
-    except (TelegramAPIError, AttributeError, OSError) as exc:
-        log.warning("demotivator failed: %s", exc)
-        return None
+    db = t.app.db
+    if t.rng.random() < GIF_CHANCE and (gif := await db.random_media(t.chat_id, MediaKind.ANIMATION)):
+        return Reply(ReplyMode.STICKER, animation=gif)
+    sticker = await db.random_media(t.chat_id, MediaKind.STICKER)
+    return Reply(ReplyMode.STICKER, sticker=sticker) if sticker else None
 
 
 async def _demotivator(t: Turn) -> Reply | None:
     photo = best_photo(t.message.photo)
-    data = await chat_demotivator(
-        t.bot, t.db, t.chain, t.chat_id, photo.file_id if photo else None,
-        seed_text=t.text, avoid=_avoid(t), rng=t.rng,
+    image = await chat_demotivator(
+        t.app.bot,
+        t.app.db,
+        t.chain,
+        t.chat_id,
+        rng=t.rng,
+        file_id=photo.file_id if photo else None,
+        seed_text=t.text,
+        avoid=t.avoid(),
     )
-    return Reply(photo=data, mode="demotivator") if data else None
+    return Reply(ReplyMode.DEMOTIVATOR, photo=image) if image else None
 
 
 async def _insult(t: Turn) -> Reply | None:
     user = t.message.from_user
     if user is None:
         return None
-    return Reply(text=make_insult(mention(user.id, user.full_name), t.chain, t.rng), mode="insult")
+    return Reply(ReplyMode.INSULT, text=make_insult(mention(user.id, user.full_name), t.chain, t.rng))
 
 
 async def _sponge(t: Turn) -> Reply | None:
     if sum(ch.isalpha() for ch in t.text) < 4:
         return None
-    return _say(mock.spongebob(t.text, t.rng), "sponge")
+    return Reply.say(taunts.spongebob(t.text, t.rng), ReplyMode.SPONGE)
 
 
-Mode = Callable[[Turn], Awaitable[Reply | None]]
-MODES: dict[str, Mode] = {
-    "phrase": _phrase,
-    "short": _short,
-    "markov": _markov,
-    "echo": _echo,
-    "hit": _hit,
-    "sticker": _sticker,
-    "demotivator": _demotivator,
-    "insult": _insult,
-    "sponge": _sponge,
+type ModeFn = Callable[[Turn], Awaitable[Reply | None]]
+MODES: dict[ReplyMode, ModeFn] = {
+    ReplyMode.PHRASE: _phrase,
+    ReplyMode.SHORT: _short,
+    ReplyMode.MARKOV: _markov,
+    ReplyMode.ECHO: _echo,
+    ReplyMode.HIT: _hit,
+    ReplyMode.STICKER: _sticker,
+    ReplyMode.DEMOTIVATOR: _demotivator,
+    ReplyMode.INSULT: _insult,
+    ReplyMode.SPONGE: _sponge,
 }
 
 
-def mode_weights(ctx: Context, *, photo: bool = False) -> dict[str, int]:
+def mode_weights(ctx: Context, *, photo: bool = False) -> dict[ReplyMode, int]:
     """How to answer, from what was said. Old phrases and short chat reactions dominate, like the original."""
-    w = {
-        "phrase": 35, "short": 25, "markov": 20, "echo": 8, "hit": 6,
-        "sticker": 5, "demotivator": 10, "insult": 3, "sponge": 1,
-    }
+    w = dict(BASE_WEIGHTS)
     if ctx.media:
-        w.update(markov=5, echo=4, sponge=0)
-        w["short"] += 20
-        w["sticker"] += 15
+        w[ReplyMode.MARKOV] = 5
+        w[ReplyMode.ECHO] = 4
+        w[ReplyMode.SPONGE] = 0
+        w[ReplyMode.SHORT] += 20
+        w[ReplyMode.STICKER] += 15
         if photo:
-            w["demotivator"] += 60
+            w[ReplyMode.DEMOTIVATOR] += 60
     else:
         if ctx.question:
-            w["markov"] += 15
-            w["phrase"] += 10
+            w[ReplyMode.MARKOV] += 15
+            w[ReplyMode.PHRASE] += 10
         if ctx.words <= 2:
-            w["short"] += 20
-            w["markov"] -= 10
+            w[ReplyMode.SHORT] += 20
+            w[ReplyMode.MARKOV] -= 10
         if ctx.shouting:
-            w["sponge"] += 20
-            w["echo"] += 10
+            w[ReplyMode.SPONGE] += 20
+            w[ReplyMode.ECHO] += 10
         if ctx.reply_to_other:
-            w["echo"] += 5
+            w[ReplyMode.ECHO] += 5
     if ctx.addressed:
-        w["phrase"] += 10
-        w["markov"] += 10
-        w["short"] -= 10
-    return {k: max(v, 0) for k, v in w.items()}
-
-
-async def _ping(message: Message, db: Database, rng: random.Random) -> str | None:
-    author = message.from_user.id if message.from_user else 0
-    for _ in range(3):
-        user = await db.random_user(message.chat.id)
-        if user and user.user_id != author:
-            return f"{mention(user.user_id, user.full_name)}, {rng.choice(PING_SUFFIXES)}"
-    return None
+        w[ReplyMode.PHRASE] += 10
+        w[ReplyMode.MARKOV] += 10
+        w[ReplyMode.SHORT] -= 10
+    return {mode: max(weight, 0) for mode, weight in w.items()}
 
 
 async def build_reply(
-    message: Message,
-    ctx: Context,
-    *,
-    db: Database,
-    chains: ChainStore,
-    state: ChatState,
-    settings: Settings,
-    bot: Bot,
-    tag: Tag | None = None,
-    rng: random.Random | None = None,
+    message: Message, ctx: Context, app: App, *, state: ChatState, tag: Tag | None = None
 ) -> Reply | None:
-    rng = rng or random.Random()
-    chain = await chains.get(message.chat.id)
-    if tag and rng.random() * 100 < settings.tag_chance:
-        return Reply(text=mock.tagged(tag.name, tag.label, chain.random_word(rng), rng), mode="tag")
-    turn = Turn(message, message.text or message.caption or "", ctx, chain, db, state, settings, bot, rng)
-    weights = {k: v for k, v in mode_weights(ctx, photo=bool(message.photo)).items() if v > 0}
+    rng = app.rng
+    chain = await app.chains.get(message.chat.id)
+    if tag and rng.random() * 100 < app.settings.tag_chance:
+        return Reply(ReplyMode.TAG, text=taunts.tagged(tag.name, tag.label, chain.random_word(rng), rng))
+    turn = Turn(message, message.text or message.caption or "", ctx, chain, state, app)
+    weights = {mode: w for mode, w in mode_weights(ctx, photo=bool(message.photo)).items() if w > 0}
     first = rng.choices(tuple(weights), weights=tuple(weights.values()))[0]
-    for name in dict.fromkeys((first, *FALLBACK)):
-        reply = await MODES[name](turn)
-        if reply is None:
-            continue
-        if reply.mode in ("phrase", "markov") and rng.random() * 100 < settings.ping_chance:
-            ping = await _ping(message, db, rng)
-            if ping:
-                reply.text = f"{reply.text}\n\n{ping}"
-        return reply
+    for mode in dict.fromkeys((first, *FALLBACK)):
+        reply = await MODES[mode](turn)
+        if reply is not None:
+            await _maybe_ping(reply, message, app)
+            return reply
     return None
+
+
+async def _maybe_ping(reply: Reply, message: Message, app: App) -> None:
+    """Sometimes drags someone else into it: «..., Вася, подтверди»."""
+    if reply.mode not in (ReplyMode.PHRASE, ReplyMode.MARKOV):
+        return
+    if app.rng.random() * 100 >= app.settings.ping_chance:
+        return
+    author = message.from_user.id if message.from_user else 0
+    for _ in range(3):
+        user = await app.db.random_user(message.chat.id)
+        if user and user.user_id != author:
+            ping = f"{mention(user.user_id, user.full_name)}, {app.rng.choice(PING_SUFFIXES)}"
+            reply.text = f"{reply.text}\n\n{ping}"
+            return
