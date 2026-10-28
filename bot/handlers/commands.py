@@ -1,24 +1,33 @@
 """Commands for everyone in the group."""
 
 import html
+import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BufferedInputFile, Message
 
 from bot.app import App
-from bot.db import KnownUser
+from bot.db import KnownUser, ToadMeme
 from bot.handlers.filters import IN_GROUP
 from bot.media import best_photo, chat_demotivator
 from bot.middlewares import CommandCooldownMiddleware
+from bot.toad import toad_of_the_day
 from bot.utils import chunks, mention
+
+log = logging.getLogger(__name__)
 
 router = Router(name="commands")
 router.message.middleware(CommandCooldownMiddleware())
 
 MENTIONS_PER_MESSAGE = 5
 MAX_CAPTION = 120
+TOAD_TRIES = 3
+ADD_WORDS = frozenset({"добавь", "добавить", "add", "+"})
 
 HELP = (
     "<b>Сглыпа 2.0</b> - запоминаю, что вы пишете, и использую против вас. "
@@ -26,6 +35,8 @@ HELP = (
     "Позвать: ответь мне, упомяни или напиши «сглыпа».\n\n"
     "/sglyp [@user|слово] - бред по чату, в стиле человека или со слова\n"
     "/demotiv или /демотив [текст] - демотиватор (реплаем на фото - из него)\n"
+    "/жаба - твоя жаба дня (реплаем - чужая)\n"
+    "/жаба добавь - реплаем на картинку: пополнить жабью коллекцию\n"
     "@бот кто насрал? - узнать правду\n"
     "/all - пингануть всех\n"
     "/forgetme - стереть мои сообщения из памяти\n\n"
@@ -100,6 +111,85 @@ async def cmd_demotiv(message: Message, command: CommandObject, app: App) -> Non
         await message.reply("Нет картинок. Скиньте фото в чат, я запомню.")
         return
     await message.answer_photo(BufferedInputFile(image, "demotivator.jpg"))
+
+
+@router.message(Command("жаба", "zhaba", "toad"), IN_GROUP)
+async def cmd_toad(message: Message, command: CommandObject, app: App) -> None:
+    """Жаба дня: a toad meme, one per person per day. As a reply: that person's toad.
+    "/жаба добавь" as a reply to a picture, gif or sticker adds it to the chat's collection."""
+    if (command.args or "").strip().lower() in ADD_WORDS:
+        await _add_toad(message, app)
+        return
+    author = message.from_user
+    target = _target_from_message(message) or (
+        KnownUser(author.id, author.full_name, author.username) if author else None
+    )
+    if target is None:
+        return
+    today = datetime.now(ZoneInfo(app.settings.timezone)).date()
+    toad = toad_of_the_day(message.chat.id, target.user_id, today)
+    caption = (
+        f"🐸 {mention(target.user_id, target.full_name)}, жаба дня:\n"
+        f"<b>{html.escape(toad.name)}</b>\n"
+        f"Редкость: {toad.rarity.name}\n"
+        f"Сила: {toad.power}/100"
+    )
+    for _ in range(TOAD_TRIES):
+        meme = await app.toads.pick(app.db, message.chat.id, target.user_id, today, app.rng)
+        if meme is None:
+            await message.reply("Жабы кончились. Скиньте свою и ответьте на неё «/жаба добавь».")
+            return
+        try:
+            sent = await _send_toad(message, meme, caption)
+        except TelegramBadRequest as exc:
+            log.warning("toad meme %s is gone: %s", meme.id, exc)
+            await app.db.drop_toad_meme(meme.id)
+            continue
+        if file_id := _file_id(sent):
+            await app.db.set_toad_file_id(meme.id, file_id)
+        return
+    await message.reply("Жабы спят. Попробуй через минуту.")
+
+
+async def _add_toad(message: Message, app: App) -> None:
+    replied = message.reply_to_message
+    media = _toad_media(replied) if replied else None
+    if media is None:
+        await message.reply("Ответь «/жаба добавь» на картинку, гифку или стикер с жабой.")
+        return
+    kind, uid, file_id = media
+    added = await app.db.add_chat_toad(message.chat.id, kind, uid, file_id)
+    total = await app.db.toad_meme_count(message.chat.id)
+    await message.reply(f"Жаба в коллекции, теперь их {total}." if added else "Эта жаба уже есть.")
+
+
+def _toad_media(message: Message) -> tuple[str, str, str] | None:
+    if photo := best_photo(message.photo):
+        return "photo", photo.file_unique_id, photo.file_id
+    if message.animation:
+        return "animation", message.animation.file_unique_id, message.animation.file_id
+    if message.sticker:
+        return "sticker", message.sticker.file_unique_id, message.sticker.file_id
+    return None
+
+
+async def _send_toad(message: Message, meme: ToadMeme, caption: str) -> Message:
+    media = meme.file_id or meme.url or ""
+    if meme.kind == "sticker":
+        sent = await message.answer_sticker(media)
+        await message.answer(caption)
+        return sent
+    if meme.kind == "animation":
+        return await message.answer_animation(media, caption=caption)
+    return await message.answer_photo(media, caption=caption)
+
+
+def _file_id(sent: Message) -> str | None:
+    if sent.photo:
+        return sent.photo[-1].file_id
+    if sent.animation:
+        return sent.animation.file_id
+    return sent.sticker.file_id if sent.sticker else None
 
 
 @router.message(Command("all"), IN_GROUP)

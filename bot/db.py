@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import aiosqlite
@@ -65,6 +66,24 @@ CREATE TABLE IF NOT EXISTS hits (
     PRIMARY KEY (chat_id, text)
 );
 
+CREATE TABLE IF NOT EXISTS toad_memes (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER,  -- NULL: from the internet, shared by all chats
+    kind    TEXT    NOT NULL,  -- photo / animation / sticker
+    source  TEXT    NOT NULL,  -- subreddit or "chat"
+    url     TEXT,
+    file_id TEXT,  -- Telegram's copy, filled after the first send
+    uid     TEXT    NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS toad_days (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    day     TEXT    NOT NULL,
+    meme_id INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id, day)
+);
+
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id      INTEGER PRIMARY KEY,
     reply_chance INTEGER NOT NULL
@@ -84,6 +103,18 @@ class Tag:
     key: str
     name: str
     label: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToadMeme:
+    id: int
+    kind: str
+    source: str
+    url: str | None
+    file_id: str | None
+
+
+_TOAD = "SELECT m.id, m.kind, m.source, m.url, m.file_id FROM toad_memes m"
 
 
 class Database:
@@ -292,6 +323,92 @@ class Database:
             "SELECT key, name, label FROM tags WHERE chat_id = ? ORDER BY key", (chat_id,)
         ) as cur:
             return [Tag(*row) for row in await cur.fetchall()]
+
+    async def add_toad_memes(self, links: Sequence[tuple[str, str, str]]) -> int:
+        """Shared memes from the internet as (kind, source, url); known urls are skipped."""
+        before = self._conn.total_changes
+        await self._conn.executemany(
+            "INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, url, uid) VALUES (NULL, ?, ?, ?, ?)",
+            [(kind, source, url, url) for kind, source, url in links],
+        )
+        await self._conn.commit()
+        return self._conn.total_changes - before
+
+    async def add_chat_toad(self, chat_id: int, kind: str, uid: str, file_id: str) -> bool:
+        cur = await self._conn.execute(
+            """INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, file_id, uid)
+               VALUES (?, ?, 'chat', ?, ?)""",
+            (chat_id, kind, file_id, f"tg:{uid}"),
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    async def toad_meme_count(self, chat_id: int | None = None) -> int:
+        """Shared memes (chat_id=None) or one chat's own collection."""
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM toad_memes WHERE chat_id IS ?", (chat_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def toad_of_day(self, chat_id: int, user_id: int, day: date) -> ToadMeme | None:
+        return await self._one_toad(
+            f"{_TOAD} JOIN toad_days d ON d.meme_id = m.id"
+            " WHERE d.chat_id = ? AND d.user_id = ? AND d.day = ?",
+            (chat_id, user_id, day.isoformat()),
+        )
+
+    async def pick_toad_meme(self, chat_id: int, day: date, *, own: bool, wednesday: bool) -> ToadMeme | None:
+        """Random meme nobody in this chat got today; own: the chat's collection, else the shared one.
+
+        Wednesday memes appear only on Wednesdays, and then they come first.
+        """
+        return await self._one_toad(
+            f"""{_TOAD}
+                WHERE m.chat_id IS ?
+                  AND m.id NOT IN (SELECT meme_id FROM toad_days WHERE chat_id = ? AND day = ?)
+                  AND (? OR m.source != 'itswednesdaymydudes')
+                ORDER BY (m.source = 'itswednesdaymydudes') DESC, RANDOM()
+                LIMIT 1""",  # noqa: S608
+            (chat_id if own else None, chat_id, day.isoformat(), wednesday),
+        )
+
+    async def prune_toads(self, today: date, *, keep_shared: int, keep_days: int = 2) -> None:
+        """Keeps the toad tables tiny: drops old day records and the oldest shared memes over keep_shared.
+
+        Memes someone holds today are never dropped.
+        """
+        since = date.fromordinal(today.toordinal() - keep_days).isoformat()
+        await self._conn.execute("DELETE FROM toad_days WHERE day < ?", (since,))
+        await self._conn.execute(
+            """DELETE FROM toad_memes WHERE chat_id IS NULL
+                 AND id NOT IN (SELECT meme_id FROM toad_days)
+                 AND id NOT IN (SELECT id FROM toad_memes WHERE chat_id IS NULL ORDER BY id DESC LIMIT ?)""",
+            (keep_shared,),
+        )
+        await self._conn.commit()
+
+    async def give_toad(self, chat_id: int, user_id: int, day: date, meme_id: int) -> None:
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO toad_days (chat_id, user_id, day, meme_id) VALUES (?, ?, ?, ?)",
+            (chat_id, user_id, day.isoformat(), meme_id),
+        )
+        await self._conn.commit()
+
+    async def set_toad_file_id(self, meme_id: int, file_id: str) -> None:
+        await self._conn.execute("UPDATE toad_memes SET file_id = ? WHERE id = ?", (file_id, meme_id))
+        await self._conn.commit()
+
+    async def drop_toad_meme(self, meme_id: int) -> None:
+        """A meme Telegram can't fetch any more (deleted on Reddit): forget it and who had it."""
+        await self._conn.execute("DELETE FROM toad_days WHERE meme_id = ?", (meme_id,))
+        await self._conn.execute("DELETE FROM toad_memes WHERE id = ?", (meme_id,))
+        await self._conn.commit()
+
+    async def _one_toad(self, query: str, args: Sequence[object]) -> ToadMeme | None:
+        async with self._conn.execute(query, args) as cur:
+            row = await cur.fetchone()
+        return ToadMeme(*row) if row else None
 
     async def _one_user(self, query: str, args: Sequence[object]) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:

@@ -90,3 +90,34 @@ async def test_forgetme(app: App) -> None:
     await commands.cmd_forgetme(cast(Message, message), app)
     assert await app.db.texts(CHAT) == []
     assert "Забыл 1" in said(message)
+
+
+async def test_toad_is_sent_and_remembered(app: App) -> None:
+    await app.db.add_toad_memes([("photo", "frogmemes", f"https://x/{i}.jpg") for i in range(400)])
+    app.toads._last_refill = 1e18
+    message = fake_message()
+    message.answer_photo.return_value = SimpleNamespace(
+        photo=[SimpleNamespace(file_id="TG_FILE")], animation=None, sticker=None
+    )
+    await commands.cmd_toad(cast(Message, message), command("жаба"), app)
+    call = message.answer_photo.await_args
+    assert call is not None and str(call.args[0]).startswith("https://x/")
+    assert "жаба дня" in call.kwargs["caption"] and "Сила:" in call.kwargs["caption"]
+
+    again = fake_message()
+    again.answer_photo.return_value = SimpleNamespace(photo=None, animation=None, sticker=None)
+    await commands.cmd_toad(cast(Message, again), command("жаба"), app)
+    assert again.answer_photo.await_args is not None and again.answer_photo.await_args.args[0] == "TG_FILE"
+
+
+async def test_toad_add_needs_a_picture(app: App) -> None:
+    message = fake_message()
+    await commands.cmd_toad(cast(Message, message), command("жаба", "добавь"), app)
+    assert "Ответь" in said(message)
+    replied = SimpleNamespace(
+        photo=None, animation=None, sticker=SimpleNamespace(file_unique_id="u", file_id="F")
+    )
+    message = fake_message()
+    message.reply_to_message = replied
+    await commands.cmd_toad(cast(Message, message), command("жаба", "добавь"), app)
+    assert "теперь их 1" in said(message)

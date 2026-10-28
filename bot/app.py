@@ -11,6 +11,7 @@ from bot.brain import Brain
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database
+from bot.toad import ToadPool
 from bot.utils import Cooldown
 
 NICK_COOLDOWN = 30.0
@@ -44,6 +45,7 @@ class App:
     cooldowns: Cooldowns
     brain: Brain = field(default_factory=Brain)
     rng: random.Random = field(default_factory=random.Random)
+    toads: ToadPool = field(default_factory=ToadPool)
 
     @classmethod
     def create(cls, settings: Settings, bot: Bot, db: Database, me: User) -> Self:
