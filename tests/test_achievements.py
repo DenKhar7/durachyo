@@ -26,7 +26,7 @@ async def test_unlock_announces_once(app: App, bot: AsyncMock) -> None:
     assert await achievements.unlock(app, CHAT, 10, "Вася", "crit")
     assert not await achievements.unlock(app, CHAT, 10, "Вася", "crit")
     (text,) = announced(bot)
-    assert "Вася" in text and "Критовик" in text
+    assert "Вася" in text and achievements.BY_CODE["crit"].title in text
 
 
 async def test_night_owl_uses_chat_timezone(app: App, bot: AsyncMock) -> None:
@@ -75,7 +75,7 @@ async def test_achievements_command(app: App) -> None:
     message = fake_message()
     await games.cmd_achievements(cast(Message, message), app)
     text = said(message)
-    assert "Криворукий" in text and f"(1/{len(achievements.ALL)})" in text
+    assert achievements.BY_CODE["fumble"].title in text and f"(1/{len(achievements.ALL)})" in text
 
 
 def test_every_counter_achievement_has_a_goal() -> None:
