@@ -11,7 +11,6 @@ from bot.brain import Brain
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database
-from bot.pinterest import PinterestBoard
 from bot.utils import Cooldown, RateLimit
 
 NICK_COOLDOWN = 30.0
@@ -49,7 +48,6 @@ class App:
     cooldowns: Cooldowns
     brain: Brain = field(default_factory=Brain)
     rng: random.Random = field(default_factory=random.Random)
-    pinterest: PinterestBoard | None = None
 
     @classmethod
     def create(cls, settings: Settings, bot: Bot, db: Database, me: User) -> Self:
@@ -60,5 +58,4 @@ class App:
             me=me,
             chains=ChainStore(db, settings.markov_order),
             cooldowns=Cooldowns.from_settings(settings),
-            pinterest=PinterestBoard.from_settings(settings),
         )

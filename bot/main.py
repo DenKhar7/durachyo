@@ -18,7 +18,6 @@ log = logging.getLogger("sglypa")
 
 COMMANDS = [
     BotCommand(command="sglyp", description="Бред по мотивам чата"),
-    BotCommand(command="toad", description="Жаба дня"),
     BotCommand(command="demotiv", description="Демотиватор"),
     BotCommand(command="duel", description="Дуэль на d20"),
     BotCommand(command="top", description="Топ дуэлянтов"),

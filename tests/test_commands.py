@@ -2,13 +2,10 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandObject
-from aiogram.methods import SendPhoto
 from aiogram.types import Message
 
 from bot.app import App
-from bot.db import Pin
 from bot.handlers import admin, commands, games
 from tests.helpers import CHAT
 
@@ -93,48 +90,6 @@ async def test_forgetme(app: App) -> None:
     await commands.cmd_forgetme(cast(Message, message), app)
     assert await app.db.texts(CHAT) == []
     assert "Забыл 1" in said(message)
-
-
-def with_board(app: App, *pins: Pin) -> None:
-    board = AsyncMock()
-    board.pins.return_value = list(pins)
-    app.pinterest = board
-
-
-async def test_toad_comes_from_pinterest_and_is_stable(app: App) -> None:
-    with_board(app, *(Pin(str(i), f"https://i.pinimg.com/{i}.jpg", "photo") for i in range(20)))
-    urls = []
-    for _ in range(2):
-        message = fake_message()
-        await commands.cmd_toad(cast(Message, message), app)
-        call = message.answer_photo.await_args
-        assert call is not None and "жаба дня" in call.kwargs["caption"]
-        urls.append(call.args[0])
-    assert urls[0] == urls[1]
-
-
-async def test_toad_skips_unsendable_pin(app: App) -> None:
-    with_board(
-        app,
-        Pin("1", "https://i.pinimg.com/1.jpg", "photo"),
-        Pin("2", "https://i.pinimg.com/2.gif", "animation"),
-    )
-    message = fake_message()
-    message.answer_photo.side_effect = TelegramBadRequest(SendPhoto(chat_id=CHAT, photo="x"), "too big")
-    message.answer_animation.side_effect = TelegramBadRequest(SendPhoto(chat_id=CHAT, photo="x"), "too big")
-    await commands.cmd_toad(cast(Message, message), app)
-    assert message.answer_photo.await_count + message.answer_animation.await_count == 2
-    assert "Жабы спят" in said(message)
-
-
-async def test_toad_without_pinterest(app: App) -> None:
-    message = fake_message()
-    await commands.cmd_toad(cast(Message, message), app)
-    assert "не настроены" in said(message)
-    with_board(app)
-    message = fake_message()
-    await commands.cmd_toad(cast(Message, message), app)
-    assert "Жабы спят" in said(message)
 
 
 async def test_duel_with_username_records_result(app: App) -> None:

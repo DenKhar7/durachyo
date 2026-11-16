@@ -1,21 +1,16 @@
 import html
 import logging
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import BufferedInputFile, Message
 
 from bot.app import App
-from bot.db import KnownUser
 from bot.handlers.filters import IN_GROUP
 from bot.handlers.targets import target_from_message
 from bot.media import best_photo, chat_demotivator
 from bot.middlewares import CommandCooldownMiddleware
-from bot.toad import toad_of_the_day, toad_seed
 from bot.utils import chunks, mention
 
 log = logging.getLogger(__name__)
@@ -25,7 +20,6 @@ router.message.middleware(CommandCooldownMiddleware())
 
 MENTIONS_PER_MESSAGE = 5
 MAX_CAPTION = 120
-TOAD_TRIES = 3
 
 HELP = (
     "<b>Сглыпа 2.0</b> - запоминаю, что вы пишете, и использую против вас. "
@@ -33,7 +27,6 @@ HELP = (
     "Позвать: ответь мне, упомяни или напиши «сглыпа».\n\n"
     "/sglyp [@user|слово] - бред по чату, в стиле человека или со слова\n"
     "/demotiv или /демотив [текст] - демотиватор (реплаем на фото - из него)\n"
-    "/жаба - твоя жаба дня (реплаем - чужая)\n"
     "/дуэль, /д, /пизда [@user] - подраться (реплаем - с ним, без никого - со случайным)\n"
     "/топ - лучшие дуэлянты\n"
     "/ачивки - твои ачивки (реплаем - чужие)\n"
@@ -98,45 +91,6 @@ async def cmd_demotiv(message: Message, command: CommandObject, app: App) -> Non
         await message.reply("Нет картинок. Скиньте фото в чат, я запомню.")
         return
     await message.answer_photo(BufferedInputFile(image, "demotivator.jpg"))
-
-
-@router.message(Command("жаба", "zhaba", "toad"), IN_GROUP)
-async def cmd_toad(message: Message, app: App) -> None:
-    """One toad per person per day. As a reply - shows that person's toad."""
-    if app.pinterest is None:
-        await message.reply("Жабы не настроены: нет доступа к Pinterest.")
-        return
-    author = message.from_user
-    target = target_from_message(message) or (
-        KnownUser(author.id, author.full_name, author.username) if author else None
-    )
-    if target is None:
-        return
-    pins = await app.pinterest.pins(app.db)
-    if not pins:
-        await message.reply("Жабы спят. Попробуй через минуту.")
-        return
-    today = datetime.now(ZoneInfo(app.settings.timezone)).date()
-    toad = toad_of_the_day(message.chat.id, target.user_id, today)
-    caption = (
-        f"🐸 {mention(target.user_id, target.full_name)}, жаба дня:\n"
-        f"<b>{html.escape(toad.name)}</b>\n"
-        f"Редкость: {toad.rarity.name}\n"
-        f"Сила: {toad.power}/100"
-    )
-    start = toad_seed(message.chat.id, target.user_id, today) % len(pins)
-    for step in range(min(TOAD_TRIES, len(pins))):
-        pin = pins[(start + step) % len(pins)]
-        try:
-            if pin.kind == "animation":
-                await message.answer_animation(pin.url, caption=caption)
-            else:
-                await message.answer_photo(pin.url, caption=caption)
-        except TelegramBadRequest as exc:  # too big or gone from Pinterest: next pin
-            log.warning("pin %s can't be sent: %s", pin.id, exc)
-            continue
-        return
-    await message.reply("Жабы спят. Попробуй через минуту.")
 
 
 @router.message(Command("all"), IN_GROUP)

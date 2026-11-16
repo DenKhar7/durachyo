@@ -65,13 +65,6 @@ CREATE TABLE IF NOT EXISTS hits (
     PRIMARY KEY (chat_id, text)
 );
 
-CREATE TABLE IF NOT EXISTS pins (
-    id       TEXT    PRIMARY KEY,  -- Pinterest pin id
-    url      TEXT    NOT NULL,     -- link to the image on i.pinimg.com; the image itself is not stored
-    kind     TEXT    NOT NULL,     -- photo / animation
-    position INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS duel_stats (
     chat_id     INTEGER NOT NULL,
     user_id     INTEGER NOT NULL,
@@ -98,16 +91,13 @@ CREATE TABLE IF NOT EXISTS counters (
     PRIMARY KEY (chat_id, user_id, key)
 );
 
-CREATE TABLE IF NOT EXISTS bot_state (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
--- leftovers of the old toad memes (Reddit, chat collection)
+-- leftovers of the removed toad of the day
 DROP TABLE IF EXISTS toad_memes;
 DROP TABLE IF EXISTS toad_days;
 DROP TABLE IF EXISTS toad_posts;
 DROP TABLE IF EXISTS toad_bans;
+DROP TABLE IF EXISTS pins;
+DROP TABLE IF EXISTS bot_state;
 
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id      INTEGER PRIMARY KEY,
@@ -128,13 +118,6 @@ class Tag:
     key: str
     name: str
     label: str
-
-
-@dataclass(frozen=True, slots=True)
-class Pin:
-    id: str
-    url: str
-    kind: str  # photo / animation
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,18 +345,6 @@ class Database:
         ) as cur:
             return [Tag(*row) for row in await cur.fetchall()]
 
-    async def replace_pins(self, pins: Sequence[Pin]) -> None:
-        await self._conn.execute("DELETE FROM pins")
-        await self._conn.executemany(
-            "INSERT OR IGNORE INTO pins (id, url, kind, position) VALUES (?, ?, ?, ?)",
-            [(p.id, p.url, p.kind, i) for i, p in enumerate(pins)],
-        )
-        await self._conn.commit()
-
-    async def pins(self) -> list[Pin]:
-        async with self._conn.execute("SELECT id, url, kind FROM pins ORDER BY position") as cur:
-            return [Pin(*row) for row in await cur.fetchall()]
-
     async def record_duel(self, chat_id: int, winner: int | None, *, a: int, b: int) -> None:
         """winner is a, b or None for a draw. A draw breaks both streaks."""
         await self._conn.executemany(
@@ -434,19 +405,6 @@ class Database:
             row = await cur.fetchone()
         await self._conn.commit()
         return int(row[0]) if row else 0
-
-    async def get_value(self, key: str) -> str | None:
-        async with self._conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)) as cur:
-            row = await cur.fetchone()
-        return str(row[0]) if row else None
-
-    async def set_value(self, key: str, value: str) -> None:
-        await self._conn.execute(
-            "INSERT INTO bot_state (key, value) VALUES (?, ?)"
-            " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
-        await self._conn.commit()
 
     async def _one_user(self, query: str, args: Sequence[object]) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:
