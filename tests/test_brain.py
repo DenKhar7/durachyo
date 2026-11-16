@@ -59,8 +59,21 @@ def test_needs_revive_once_per_silence() -> None:
     clock.t += 3600
     assert brain.needs_revive(-1, 3600)
     brain.spoke(-1)
+    brain.mark_revived(-1)
     clock.t += 99999
     assert not brain.needs_revive(-1, 3600)
+    brain.observe(-1)  # someone talked: the next silence can be poked again
+    clock.t += 3600
+    assert brain.needs_revive(-1, 3600)
+
+
+def test_revive_also_when_the_bot_had_the_last_word() -> None:
+    clock = FakeClock()
+    brain = Brain(clock)
+    brain.observe(-1)
+    brain.spoke(-1, "normalno", 1)
+    clock.t += 3600
+    assert brain.needs_revive(-1, 3600)
     assert not brain.needs_revive(-1, 0)
 
 

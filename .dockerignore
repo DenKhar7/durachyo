@@ -18,6 +18,7 @@ CLAUDE.md
 .ruff_cache/
 .github/
 deploy/
+tools/
 .idea/
 .vscode/
 README.md

@@ -1,4 +1,4 @@
-"""Commands only for ADMIN_IDS: how chatty the bot is and custom labels for names."""
+"""Admin-only commands (ADMIN_IDS)."""
 
 import html
 
@@ -28,7 +28,7 @@ async def cmd_chance(message: Message, command: CommandObject, app: App) -> None
         await message.reply(f"Сейчас {current}%. Поменять: /chance 0..100")
         return
     value = command.args.strip().rstrip("%")
-    if not value.isdigit() or not 0 <= int(value) <= 100:
+    if not value.isdecimal() or not 0 <= int(value) <= 100:
         await message.reply("Нужно число от 0 до 100.")
         return
     await app.db.set_reply_chance(chat_id, int(value))
@@ -65,4 +65,5 @@ async def cmd_tags(message: Message, app: App) -> None:
     if not tags:
         await message.reply("Ярлыков нет. Добавить: /tag Имя ярлык")
         return
-    await message.reply("\n".join(f"{html.escape(t.name)} - {html.escape(t.label)}" for t in tags))
+    text = "\n".join(f"{html.escape(t.name)} - {html.escape(t.label)}" for t in tags)
+    await message.reply(text[:4000])  # telegram cuts messages at 4096

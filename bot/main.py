@@ -1,5 +1,3 @@
-"""Entry point: wires settings, database, bot and handlers together and starts polling."""
-
 import asyncio
 import logging
 from contextlib import suppress
@@ -12,7 +10,7 @@ from aiogram.types import BotCommand
 from bot.app import App
 from bot.config import Settings
 from bot.db import Database
-from bot.handlers import admin, collect, commands
+from bot.handlers import admin, collect, commands, games
 from bot.middlewares import TrackUsersMiddleware, WhitelistMiddleware
 from bot.revive import revive_loop
 
@@ -22,6 +20,9 @@ COMMANDS = [
     BotCommand(command="sglyp", description="Бред по мотивам чата"),
     BotCommand(command="toad", description="Жаба дня"),
     BotCommand(command="demotiv", description="Демотиватор"),
+    BotCommand(command="duel", description="Дуэль на d20"),
+    BotCommand(command="top", description="Топ дуэлянтов"),
+    BotCommand(command="ach", description="Мои ачивки"),
     BotCommand(command="all", description="Пингануть всех"),
     BotCommand(command="forgetme", description="Забыть мои сообщения"),
     BotCommand(command="help", description="Помощь"),
@@ -33,7 +34,7 @@ def build_dispatcher(app: App) -> Dispatcher:
     dp = Dispatcher(app=app)
     dp.update.outer_middleware(WhitelistMiddleware())
     dp.message.outer_middleware(TrackUsersMiddleware())
-    dp.include_routers(admin.router, commands.router, collect.router)
+    dp.include_routers(admin.router, commands.router, games.router, collect.router)
     return dp
 
 

@@ -2,11 +2,14 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandObject
+from aiogram.methods import SendPhoto
 from aiogram.types import Message
 
 from bot.app import App
-from bot.handlers import admin, commands
+from bot.db import Pin
+from bot.handlers import admin, commands, games
 from tests.helpers import CHAT
 
 
@@ -92,63 +95,87 @@ async def test_forgetme(app: App) -> None:
     assert "Забыл 1" in said(message)
 
 
-async def test_toad_is_sent_and_remembered(app: App) -> None:
-    await app.db.add_toad_memes([("photo", "frogmemes", f"https://x/{i}.jpg") for i in range(400)])
-    app.toads._last_refill = 1e18
-    message = fake_message()
-    message.answer_photo.return_value = SimpleNamespace(
-        message_id=55, photo=[SimpleNamespace(file_id="TG_FILE")], animation=None, sticker=None
+def with_board(app: App, *pins: Pin) -> None:
+    board = AsyncMock()
+    board.pins.return_value = list(pins)
+    app.pinterest = board
+
+
+async def test_toad_comes_from_pinterest_and_is_stable(app: App) -> None:
+    with_board(app, *(Pin(str(i), f"https://i.pinimg.com/{i}.jpg", "photo") for i in range(20)))
+    urls = []
+    for _ in range(2):
+        message = fake_message()
+        await commands.cmd_toad(cast(Message, message), app)
+        call = message.answer_photo.await_args
+        assert call is not None and "жаба дня" in call.kwargs["caption"]
+        urls.append(call.args[0])
+    assert urls[0] == urls[1]
+
+
+async def test_toad_skips_unsendable_pin(app: App) -> None:
+    with_board(
+        app,
+        Pin("1", "https://i.pinimg.com/1.jpg", "photo"),
+        Pin("2", "https://i.pinimg.com/2.gif", "animation"),
     )
-    await commands.cmd_toad(cast(Message, message), command("жаба"), app)
-    call = message.answer_photo.await_args
-    assert call is not None and str(call.args[0]).startswith("https://x/")
-    assert "жаба дня" in call.kwargs["caption"] and "Сила:" in call.kwargs["caption"]
-
-    again = fake_message()
-    again.answer_photo.return_value = SimpleNamespace(message_id=56, photo=None, animation=None, sticker=None)
-    await commands.cmd_toad(cast(Message, again), command("жаба"), app)
-    assert again.answer_photo.await_args is not None and again.answer_photo.await_args.args[0] == "TG_FILE"
-
-
-async def test_toad_add_needs_a_picture(app: App) -> None:
     message = fake_message()
-    await commands.cmd_toad(cast(Message, message), command("жаба", "добавь"), app)
-    assert "Ответь" in said(message)
-    replied = SimpleNamespace(
-        photo=None, animation=None, sticker=SimpleNamespace(file_unique_id="u", file_id="F")
-    )
+    message.answer_photo.side_effect = TelegramBadRequest(SendPhoto(chat_id=CHAT, photo="x"), "too big")
+    message.answer_animation.side_effect = TelegramBadRequest(SendPhoto(chat_id=CHAT, photo="x"), "too big")
+    await commands.cmd_toad(cast(Message, message), app)
+    assert message.answer_photo.await_count + message.answer_animation.await_count == 2
+    assert "Жабы спят" in said(message)
+
+
+async def test_toad_without_pinterest(app: App) -> None:
     message = fake_message()
-    message.reply_to_message = replied
-    await commands.cmd_toad(cast(Message, message), command("жаба", "добавь"), app)
-    assert "теперь их 1" in said(message)
-
-
-async def test_not_toad_bans_meme_and_frees_the_day(app: App) -> None:
-    await app.db.add_toad_memes([("photo", "frogmemes", f"https://x/{i}.jpg") for i in range(400)])
-    app.toads._last_refill = 1e18
+    await commands.cmd_toad(cast(Message, message), app)
+    assert "не настроены" in said(message)
+    with_board(app)
     message = fake_message()
-    message.answer_photo.return_value = SimpleNamespace(
-        message_id=55, photo=[SimpleNamespace(file_id="F")], animation=None, sticker=None
-    )
-    await commands.cmd_toad(cast(Message, message), command("жаба"), app)
-    call = message.answer_photo.await_args
-    assert call is not None
-    url = str(call.args[0])
-
-    vote = fake_message()
-    vote.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=app.me.id), message_id=55)
-    await commands.cmd_not_toad(cast(Message, vote), app)
-    assert "Выкинул" in said(vote)
-    app.bot.delete_message.assert_awaited_once_with(CHAT, 55)  # type: ignore[attr-defined]
-    assert await app.db.add_toad_memes([("photo", "frogmemes", url)]) == 0
-    assert await app.db.toad_meme_count() == 399
+    await commands.cmd_toad(cast(Message, message), app)
+    assert "Жабы спят" in said(message)
 
 
-async def test_not_toad_needs_a_reply_to_the_bot(app: App) -> None:
+async def test_duel_with_username_records_result(app: App) -> None:
+    await app.db.upsert_user(CHAT, 11, "Петя", "petya")
     message = fake_message()
-    await commands.cmd_not_toad(cast(Message, message), app)
-    assert "Ответь" in said(message)
+    await games.cmd_duel(cast(Message, message), command("дуэль", "@Petya"), app)
+    text = said(message)
+    assert "⚔️" in text and "Петя" in text and "Вася" in text and "🎲" in text
+    a, b = await app.db.duelist(CHAT, 10), await app.db.duelist(CHAT, 11)
+    assert a.wins + a.losses == b.wins + b.losses <= 1
+
+
+async def test_duel_random_opponent_self_and_nobody(app: App) -> None:
     message = fake_message()
-    message.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=app.me.id), message_id=999)
-    await commands.cmd_not_toad(cast(Message, message), app)
-    assert "Не нашёл" in said(message)
+    await games.cmd_duel(cast(Message, message), command("дуэль"), app)
+    assert "Не с кем" in said(message)
+    await app.db.upsert_user(CHAT, 10, "Вася", "vasya")
+    message = fake_message()
+    await games.cmd_duel(cast(Message, message), command("дуэль", "@vasya"), app)
+    assert "психологу" in said(message)
+    await app.db.upsert_user(CHAT, 12, "Маша", None)
+    message = fake_message()
+    await games.cmd_duel(cast(Message, message), command("дуэль"), app)
+    assert "Маша" in said(message)
+
+
+async def test_duel_limit_per_minute(app: App) -> None:
+    await app.db.upsert_user(CHAT, 11, "Петя", "petya")
+    for _ in range(5):
+        await games.cmd_duel(cast(Message, fake_message()), command("дуэль", "@petya"), app)
+    message = fake_message()
+    await games.cmd_duel(cast(Message, message), command("дуэль", "@petya"), app)
+    assert "отдохните" in said(message)
+
+
+async def test_top(app: App) -> None:
+    message = fake_message()
+    await games.cmd_top(cast(Message, message), app)
+    assert "никто не дрался" in said(message)
+    await app.db.upsert_user(CHAT, 11, "Петя", None)
+    await app.db.record_duel(CHAT, 11, a=10, b=11)
+    message = fake_message()
+    await games.cmd_top(cast(Message, message), app)
+    assert "1. Петя - 1-0" in said(message)

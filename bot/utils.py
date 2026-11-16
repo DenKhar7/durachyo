@@ -1,8 +1,7 @@
-"""Small helpers shared by handlers: mentions, addressing the bot, cooldowns."""
-
 import html
 import re
 import time
+from collections import deque
 from collections.abc import Callable, Hashable, Iterable, Iterator
 
 GROUP_TYPES = frozenset({"group", "supergroup"})
@@ -12,7 +11,7 @@ _WHO = re.compile(r"(?:^|[\s,.!:])кто\s+([^?!.\n]{1,60})", re.IGNORECASE)
 
 
 def mention(user_id: int, name: str | None) -> str:
-    """Clickable HTML mention that pings the user even without a @username."""
+    # works for people without a @username too
     return f'<a href="tg://user?id={int(user_id)}">{html.escape(name or "безымянный")}</a>'
 
 
@@ -24,7 +23,6 @@ def is_addressed(
     bot_username: str | None,
     triggers: Iterable[str],
 ) -> bool:
-    """True if the message replies to the bot, @mentions it or calls it by any form of its name."""
     if reply_to_user_id == bot_id:
         return True
     lowered = text.lower()
@@ -34,7 +32,7 @@ def is_addressed(
 
 
 def who_question(text: str) -> str | None:
-    """'сглыпа, кто насрал?' -> 'насрал'. The bot's own names are dropped from the answer."""
+    """'сглыпа, кто насрал?' -> 'насрал'"""
     m = _WHO.search(text)
     if not m:
         return None
@@ -55,8 +53,6 @@ def chunks[T](items: list[T], size: int) -> Iterator[list[T]]:
 
 
 class Cooldown:
-    """Lets an action through for a key at most once per seconds."""
-
     MAX_KEYS = 10_000
 
     def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
@@ -72,4 +68,24 @@ class Cooldown:
         self._last[key] = now
         if len(self._last) > self.MAX_KEYS:
             self._last = {k: t for k, t in self._last.items() if now - t < self.seconds}
+        return True
+
+
+class RateLimit:
+    """At most limit actions per key in any window of seconds."""
+
+    def __init__(self, limit: int, seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.limit = limit
+        self.seconds = seconds
+        self._clock = clock
+        self._hits: dict[Hashable, deque[float]] = {}
+
+    def ready(self, key: Hashable) -> bool:
+        now = self._clock()
+        hits = self._hits.setdefault(key, deque())
+        while hits and now - hits[0] >= self.seconds:
+            hits.popleft()
+        if len(hits) >= self.limit:
+            return False
+        hits.append(now)
         return True

@@ -37,10 +37,25 @@ class Settings(BaseSettings):
     min_message_length: int = Field(2, ge=1)
     max_message_length: int = Field(1000, ge=10)
 
+    pinterest_app_id: str = ""
+    pinterest_app_secret: SecretStr = SecretStr("")
+    pinterest_refresh_token: SecretStr = SecretStr("")
+    pinterest_board_id: str = Field("", pattern=r"^\d*$")  # numeric, goes into the API url
+
     command_cooldown: float = Field(3.0, ge=0)
     reply_cooldown: float = Field(2.0, ge=0)
     all_cooldown: float = Field(300.0, ge=0)
+    duels_per_minute: int = Field(5, ge=1)
     log_level: str = "INFO"
+
+    @property
+    def pinterest_ready(self) -> bool:
+        return bool(
+            self.pinterest_app_id
+            and self.pinterest_app_secret.get_secret_value()
+            and self.pinterest_refresh_token.get_secret_value()
+            and self.pinterest_board_id
+        )
 
     @field_validator("allowed_chat_ids", "admin_ids", mode="before")
     @classmethod

@@ -1,5 +1,3 @@
-"""Text templates for taunts: insults, labels, spongebob case."""
-
 import html
 import random
 
@@ -101,7 +99,6 @@ TAGGED_NO_WORD = (
 
 
 def spongebob(text: str, rng: random.Random) -> str:
-    """пОвТоРяЕт С кРиВлЯнИеМ."""
     upper = rng.random() < 0.5
     out = []
     for ch in text:
@@ -114,7 +111,7 @@ def spongebob(text: str, rng: random.Random) -> str:
 
 
 def insult(name_html: str, word: str | None, rng: random.Random) -> str:
-    """Stock insult; templates with a chat word are used only when there is a word."""
+    # templates with {word} only make sense when we have a word from the chat
     templates = INSULTS if word else tuple(t for t in INSULTS if "{word}" not in t)
     return rng.choice(templates).format(
         name=name_html,
@@ -125,14 +122,12 @@ def insult(name_html: str, word: str | None, rng: random.Random) -> str:
 
 
 def chat_insult(name_html: str, phrase: str, word: str, adj: str, rng: random.Random) -> str:
-    """Insult assembled from the chat's own vocabulary."""
     return rng.choice(CHAT_INSULTS).format(
         name=name_html, phrase=html.escape(phrase), word=html.escape(word), adj=html.escape(adj)
     )
 
 
 def tagged(name: str, tag: str, word: str | None, rng: random.Random) -> str:
-    """Reply for a /tag label: «А ну да, Зигор тот ещё ...»."""
     templates = TAGGED if word else TAGGED_NO_WORD
     return rng.choice(templates).format(
         name=html.escape(name), tag=html.escape(tag), word=html.escape(word or "")

@@ -1,4 +1,4 @@
-"""Every group message lands here: the bot learns from it, then maybe jokes, reacts or answers."""
+"""Every message in the group goes through handle(): learn it, then maybe joke, react or answer."""
 
 import asyncio
 import html
@@ -10,7 +10,7 @@ from aiogram.enums import ContentType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile, Message, ReactionTypeEmoji
 
-from bot import voice
+from bot import achievements, voice
 from bot.app import App
 from bot.brain import ChatState, analyze
 from bot.handlers.filters import IN_GROUP
@@ -72,6 +72,9 @@ async def handle(message: Message, app: App, *, text: str, media: str | None) ->
     state = app.brain.observe(chat_id, text or None)
     laugh = voice.is_laugh(text, message.sticker.emoji if message.sticker else None)
     await _credit_laugh(app, chat_id, state, laugh=laugh)
+    laughed_at = state.last_author if laugh else None
+    state.last_author = None if laugh else user.id  # laughing at a laugh doesn't count
+    await achievements.on_message(app, message, text=text, called=called, laughed_at=laughed_at)
 
     clean = strip_mention(text, app.me.username)
     await _learn(message, app, user.id, clean)
@@ -102,7 +105,7 @@ def _replies_to_someone_else(message: Message) -> bool:
 
 
 async def _credit_laugh(app: App, chat_id: int, state: ChatState, *, laugh: bool) -> None:
-    """A laugh right after the bot's line scores that line, so it comes back more often."""
+    # people laughed right after our line -> it gets a point and comes back more often
     if laugh and not state.scored and state.last_bot_plain and state.since_bot <= LAUGH_WINDOW:
         state.scored = True
         await app.db.add_hit(chat_id, state.last_bot_plain)
@@ -118,7 +121,7 @@ async def _learn(message: Message, app: App, user_id: int, clean: str) -> None:
 
 
 async def _answer_who(message: Message, app: App, clean: str) -> bool:
-    """«@bot кто насрал» -> pings a random person from the chat: «Вася насрал»."""
+    # «@bot кто насрал» -> «Вася насрал»
     what = who_question(clean)
     if not what or not app.cooldowns.who.ready(message.chat.id):
         return False
@@ -136,7 +139,6 @@ async def _answer_who(message: Message, app: App, clean: str) -> bool:
 
 
 async def _tease_nick(message: Message, app: App, text: str) -> bool:
-    """Running jokes about the crew: a reaction or «Маша - свинья» when a name comes up."""
     hit = find_nick(text)
     if hit is None or app.rng.random() * 100 >= app.settings.nick_chance:
         return False
@@ -192,7 +194,6 @@ async def _react(message: Message, app: App, emoji: str) -> None:
 
 
 async def _send(message: Message, app: App, reply: Reply, *, as_reply: bool, delay: bool = True) -> bool:
-    """Sends like a person would (a short pause, sometimes as a Telegram reply) and remembers it."""
     if delay:
         await asyncio.sleep(app.rng.uniform(*TYPING_DELAY))
     try:

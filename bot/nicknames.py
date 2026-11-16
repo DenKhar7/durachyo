@@ -53,9 +53,9 @@ NICKS = (
 
 
 def find_nick(text: str) -> NickHit | None:
-    """First crew name in the text.
+    """First of our names in the text.
 
-    Nick.display=None keeps the name as written (Зигор, Зигагор, Зигогор) minus the case ending.
+    Nicks without display keep the name as it was written (Зигор, Зигагор, Зигогор), minus the ending.
     """
     for word in text.split():
         key = normalize(word)
@@ -72,7 +72,7 @@ def nick_line(hit: NickHit, rng: random.Random) -> str:
 
 
 def find_tag(text: str, tags: list[Tag]) -> Tag | None:
-    """A /tag label whose name appears in the text, allowing short Russian endings (Егор -> Егора, Егору)."""
+    """A /tag whose name is in the text. Up to 3 extra letters are fine: Егор -> Егора, Егору."""
     words = [normalize(w) for w in text.split()]
     for tag in tags:
         for w in words:

@@ -1,6 +1,5 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 
 import aiosqlite
@@ -11,12 +10,12 @@ _BEFORE_RECENT = "id <= (SELECT id FROM messages WHERE chat_id = ? ORDER BY id D
 
 
 def _lower(value: str | None) -> str | None:
-    """SQLite's lower() only knows ASCII; this one lowers Cyrillic too."""
+    # sqlite's lower() only does ascii, cyrillic stays as is
     return value.lower() if value is not None else None
 
 
 def _escape_like(value: str) -> str:
-    """Makes % and _ in user text literal for LIKE ... ESCAPE '!'."""
+    # so that someone writing "100%" doesn't turn into a LIKE wildcard
     return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
@@ -66,35 +65,49 @@ CREATE TABLE IF NOT EXISTS hits (
     PRIMARY KEY (chat_id, text)
 );
 
-CREATE TABLE IF NOT EXISTS toad_memes (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,  -- NULL: from the internet, shared by all chats
-    kind    TEXT    NOT NULL,  -- photo / animation / sticker
-    source  TEXT    NOT NULL,  -- subreddit or "chat"
-    url     TEXT,
-    file_id TEXT,  -- Telegram's copy, filled after the first send
-    uid     TEXT    NOT NULL UNIQUE
+CREATE TABLE IF NOT EXISTS pins (
+    id       TEXT    PRIMARY KEY,  -- Pinterest pin id
+    url      TEXT    NOT NULL,     -- link to the image on i.pinimg.com; the image itself is not stored
+    kind     TEXT    NOT NULL,     -- photo / animation
+    position INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS toad_days (
+CREATE TABLE IF NOT EXISTS duel_stats (
+    chat_id     INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    wins        INTEGER NOT NULL DEFAULT 0,
+    losses      INTEGER NOT NULL DEFAULT 0,
+    streak      INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS achievements (
+    chat_id     INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    code        TEXT    NOT NULL,
+    unlocked_at INTEGER NOT NULL DEFAULT ({_NOW}),
+    PRIMARY KEY (chat_id, user_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS counters (
     chat_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
-    day     TEXT    NOT NULL,
-    meme_id INTEGER NOT NULL,
-    PRIMARY KEY (chat_id, user_id, day)
+    key     TEXT    NOT NULL,
+    value   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id, key)
 );
 
-CREATE TABLE IF NOT EXISTS toad_posts (
-    chat_id    INTEGER NOT NULL,
-    message_id INTEGER NOT NULL,  -- the bot's message with the toad, for /нежаба
-    meme_id    INTEGER NOT NULL,
-    day        TEXT    NOT NULL,
-    PRIMARY KEY (chat_id, message_id)
+CREATE TABLE IF NOT EXISTS bot_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS toad_bans (
-    uid TEXT PRIMARY KEY  -- memes voted «не жаба»: never added again
-);
+-- leftovers of the old toad memes (Reddit, chat collection)
+DROP TABLE IF EXISTS toad_memes;
+DROP TABLE IF EXISTS toad_days;
+DROP TABLE IF EXISTS toad_posts;
+DROP TABLE IF EXISTS toad_bans;
 
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id      INTEGER PRIMARY KEY,
@@ -118,15 +131,24 @@ class Tag:
 
 
 @dataclass(frozen=True, slots=True)
-class ToadMeme:
-    id: int
-    kind: str
-    source: str
-    url: str | None
-    file_id: str | None
+class Pin:
+    id: str
+    url: str
+    kind: str  # photo / animation
 
 
-_TOAD = "SELECT m.id, m.kind, m.source, m.url, m.file_id FROM toad_memes m"
+@dataclass(frozen=True, slots=True)
+class Duelist:
+    user_id: int
+    name: str | None
+    wins: int = 0
+    losses: int = 0
+    streak: int = 0
+    best_streak: int = 0
+
+
+_DUELIST = """SELECT d.user_id, u.full_name, d.wins, d.losses, d.streak, d.best_streak
+FROM duel_stats d LEFT JOIN users u ON u.chat_id = d.chat_id AND u.user_id = d.user_id"""
 
 
 class Database:
@@ -179,10 +201,7 @@ class Database:
         min_words: int = 2,
         max_words: int = 12,
     ) -> str | None:
-        """Random message older than the newest skip_recent ones.
-
-        With word: only messages containing it, case-insensitive.
-        """
+        """Random message, skipping the newest skip_recent ones. With word - only ones containing it."""
         # only module constants are interpolated, user values go through ? placeholders
         query = (
             f"SELECT text FROM messages WHERE chat_id = ? AND {_BEFORE_RECENT} AND {_SPACES} BETWEEN ? AND ?"  # noqa: S608
@@ -198,7 +217,7 @@ class Database:
     async def short_phrases(
         self, chat_id: int, limit: int = 150, min_count: int = 2
     ) -> list[tuple[str, int]]:
-        """The chat's own go-to replies: messages of up to 3 words that people keep repeating."""
+        """Short things people here keep saying («го», «база»...) with how often."""
         async with self._conn.execute(
             f"""SELECT pylower(trim(text)) AS t, COUNT(*) AS n FROM messages
                 WHERE chat_id = ? AND length(text) <= 30 AND {_SPACES} <= 2
@@ -210,7 +229,6 @@ class Database:
     async def add_media(
         self, chat_id: int, kind: str, uid: str, file_id: str, *, emoji: str | None = None, keep: int = 500
     ) -> None:
-        """Remembers a sticker/gif/photo by its unique id, keeping the newest keep of each kind."""
         await self._conn.execute(
             """INSERT INTO media (chat_id, kind, uid, file_id, emoji) VALUES (?, ?, ?, ?, ?)
                ON CONFLICT (chat_id, uid) DO UPDATE SET file_id = excluded.file_id""",
@@ -246,7 +264,14 @@ class Database:
         ) as cur:
             return [(row[0], row[1]) for row in await cur.fetchall()]
 
-    async def upsert_user(self, chat_id: int, user_id: int, full_name: str, username: str | None) -> None:
+    async def upsert_user(
+        self, chat_id: int, user_id: int, full_name: str, username: str | None
+    ) -> int | None:
+        """Returns when we saw this person before (unix time), None if never."""
+        async with self._conn.execute(
+            "SELECT last_seen FROM users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id)
+        ) as cur:
+            row = await cur.fetchone()
         await self._conn.execute(
             f"""INSERT INTO users (chat_id, user_id, full_name, username, last_seen)
                 VALUES (?, ?, ?, ?, {_NOW})
@@ -257,6 +282,7 @@ class Database:
             (chat_id, user_id, full_name, username),
         )
         await self._conn.commit()
+        return int(row[0]) if row else None
 
     async def get_user(self, chat_id: int, user_id: int) -> KnownUser | None:
         return await self._one_user(
@@ -336,124 +362,91 @@ class Database:
         ) as cur:
             return [Tag(*row) for row in await cur.fetchall()]
 
-    async def add_toad_memes(self, links: Sequence[tuple[str, str, str]]) -> int:
-        """Shared memes from the internet as (kind, source, url); known and banned urls are skipped."""
-        before = self._conn.total_changes
+    async def replace_pins(self, pins: Sequence[Pin]) -> None:
+        await self._conn.execute("DELETE FROM pins")
         await self._conn.executemany(
-            """INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, url, uid)
-               SELECT NULL, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM toad_bans WHERE uid = ?)""",
-            [(kind, source, url, url, url) for kind, source, url in links],
+            "INSERT OR IGNORE INTO pins (id, url, kind, position) VALUES (?, ?, ?, ?)",
+            [(p.id, p.url, p.kind, i) for i, p in enumerate(pins)],
         )
         await self._conn.commit()
-        return self._conn.total_changes - before
 
-    async def add_chat_toad(self, chat_id: int, kind: str, uid: str, file_id: str) -> bool:
-        key = f"tg:{uid}"
+    async def pins(self) -> list[Pin]:
+        async with self._conn.execute("SELECT id, url, kind FROM pins ORDER BY position") as cur:
+            return [Pin(*row) for row in await cur.fetchall()]
+
+    async def record_duel(self, chat_id: int, winner: int | None, *, a: int, b: int) -> None:
+        """winner is a, b or None for a draw. A draw breaks both streaks."""
+        await self._conn.executemany(
+            "INSERT OR IGNORE INTO duel_stats (chat_id, user_id) VALUES (?, ?)", [(chat_id, a), (chat_id, b)]
+        )
+        for user_id in (a, b):
+            if user_id == winner:
+                # in sqlite the right side sees the old values, so streak + 1 is the new streak
+                query = """UPDATE duel_stats SET wins = wins + 1, streak = streak + 1,
+                           best_streak = MAX(best_streak, streak + 1) WHERE chat_id = ? AND user_id = ?"""
+            elif winner is None:
+                query = "UPDATE duel_stats SET streak = 0 WHERE chat_id = ? AND user_id = ?"
+            else:
+                query = (
+                    "UPDATE duel_stats SET losses = losses + 1, streak = 0 WHERE chat_id = ? AND user_id = ?"
+                )
+            await self._conn.execute(query, (chat_id, user_id))
+        await self._conn.commit()
+
+    async def duelist(self, chat_id: int, user_id: int) -> Duelist:
+        async with self._conn.execute(
+            f"{_DUELIST} WHERE d.chat_id = ? AND d.user_id = ?",
+            (chat_id, user_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return Duelist(*row) if row else Duelist(user_id, None)
+
+    async def duel_top(self, chat_id: int, limit: int = 10) -> list[Duelist]:
+        async with self._conn.execute(
+            f"{_DUELIST} WHERE d.chat_id = ? ORDER BY d.wins DESC, d.losses ASC LIMIT ?",
+            (chat_id, limit),
+        ) as cur:
+            return [Duelist(*row) for row in await cur.fetchall()]
+
+    async def unlock_achievement(self, chat_id: int, user_id: int, code: str) -> bool:
+        """True only the first time."""
         cur = await self._conn.execute(
-            """INSERT OR IGNORE INTO toad_memes (chat_id, kind, source, file_id, uid)
-               SELECT ?, ?, 'chat', ?, ? WHERE NOT EXISTS (SELECT 1 FROM toad_bans WHERE uid = ?)""",
-            (chat_id, kind, file_id, key, key),
+            "INSERT OR IGNORE INTO achievements (chat_id, user_id, code) VALUES (?, ?, ?)",
+            (chat_id, user_id, code),
         )
         await self._conn.commit()
         return cur.rowcount > 0
 
-    async def remember_toad_post(self, chat_id: int, message_id: int, meme_id: int, day: date) -> None:
-        await self._conn.execute(
-            "INSERT OR REPLACE INTO toad_posts (chat_id, message_id, meme_id, day) VALUES (?, ?, ?, ?)",
-            (chat_id, message_id, meme_id, day.isoformat()),
-        )
-        await self._conn.commit()
-
-    async def toad_by_post(self, chat_id: int, message_id: int) -> ToadMeme | None:
-        return await self._one_toad(
-            f"{_TOAD} JOIN toad_posts p ON p.meme_id = m.id WHERE p.chat_id = ? AND p.message_id = ?",
-            (chat_id, message_id),
-        )
-
-    async def ban_toad_meme(self, meme_id: int) -> None:
-        """«Не жаба»: the meme is gone for good, refills won't bring it back."""
-        await self._conn.execute(
-            "INSERT OR IGNORE INTO toad_bans (uid) SELECT uid FROM toad_memes WHERE id = ?", (meme_id,)
-        )
-        await self.drop_toad_meme(meme_id)
-
-    async def toad_meme_count(self, chat_id: int | None = None) -> int:
-        """Shared memes (chat_id=None) or one chat's own collection."""
+    async def achievements(self, chat_id: int, user_id: int) -> list[str]:
         async with self._conn.execute(
-            "SELECT COUNT(*) FROM toad_memes WHERE chat_id IS ?", (chat_id,)
+            "SELECT code FROM achievements WHERE chat_id = ? AND user_id = ? ORDER BY unlocked_at, code",
+            (chat_id, user_id),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+    async def bump_counter(self, chat_id: int, user_id: int, key: str, amount: int = 1) -> int:
+        async with self._conn.execute(
+            """INSERT INTO counters (chat_id, user_id, key, value) VALUES (?, ?, ?, ?)
+               ON CONFLICT (chat_id, user_id, key) DO UPDATE SET value = value + excluded.value
+               RETURNING value""",
+            (chat_id, user_id, key, amount),
         ) as cur:
             row = await cur.fetchone()
-        return row[0] if row else 0
-
-    async def toad_of_day(self, chat_id: int, user_id: int, day: date) -> ToadMeme | None:
-        return await self._one_toad(
-            f"{_TOAD} JOIN toad_days d ON d.meme_id = m.id"
-            " WHERE d.chat_id = ? AND d.user_id = ? AND d.day = ?",
-            (chat_id, user_id, day.isoformat()),
-        )
-
-    async def pick_toad_meme(self, chat_id: int, day: date, *, own: bool, wednesday: bool) -> ToadMeme | None:
-        """Random meme nobody in this chat got today; own: the chat's collection, else the shared one.
-
-        Wednesday memes appear only on Wednesdays, and then they come first.
-        """
-        return await self._one_toad(
-            f"""{_TOAD}
-                WHERE m.chat_id IS ?
-                  AND m.id NOT IN (SELECT meme_id FROM toad_days WHERE chat_id = ? AND day = ?)
-                  AND (? OR m.source != 'wednesday')
-                ORDER BY (m.source = 'wednesday') DESC, RANDOM()
-                LIMIT 1""",  # noqa: S608
-            (chat_id if own else None, chat_id, day.isoformat(), wednesday),
-        )
-
-    async def prune_toads(
-        self, today: date, *, keep_shared: int, sources: Sequence[str], keep_days: int = 2
-    ) -> None:
-        """Keeps the toad tables tiny and clean.
-
-        Shared memes from sources no longer used are dropped at once, even if someone holds one today.
-        Then old day records go, and the oldest shared memes over keep_shared unless someone holds them.
-        """
-        marks = ", ".join("?" * len(sources))
-        stale = f"SELECT id FROM toad_memes WHERE chat_id IS NULL AND source NOT IN ({marks})"  # noqa: S608
-        await self._conn.execute(f"DELETE FROM toad_days WHERE meme_id IN ({stale})", tuple(sources))  # noqa: S608
-        await self._conn.execute(f"DELETE FROM toad_memes WHERE id IN ({stale})", tuple(sources))  # noqa: S608
-        since = date.fromordinal(today.toordinal() - keep_days).isoformat()
-        await self._conn.execute("DELETE FROM toad_days WHERE day < ?", (since,))
-        await self._conn.execute(
-            "DELETE FROM toad_posts WHERE day < ? OR meme_id NOT IN (SELECT id FROM toad_memes)", (since,)
-        )
-        await self._conn.execute(
-            """DELETE FROM toad_memes WHERE chat_id IS NULL
-                 AND id NOT IN (SELECT meme_id FROM toad_days)
-                 AND id NOT IN (SELECT id FROM toad_memes WHERE chat_id IS NULL ORDER BY id DESC LIMIT ?)""",
-            (keep_shared,),
-        )
         await self._conn.commit()
+        return int(row[0]) if row else 0
 
-    async def give_toad(self, chat_id: int, user_id: int, day: date, meme_id: int) -> None:
-        await self._conn.execute(
-            "INSERT OR REPLACE INTO toad_days (chat_id, user_id, day, meme_id) VALUES (?, ?, ?, ?)",
-            (chat_id, user_id, day.isoformat(), meme_id),
-        )
-        await self._conn.commit()
-
-    async def set_toad_file_id(self, meme_id: int, file_id: str) -> None:
-        await self._conn.execute("UPDATE toad_memes SET file_id = ? WHERE id = ?", (file_id, meme_id))
-        await self._conn.commit()
-
-    async def drop_toad_meme(self, meme_id: int) -> None:
-        """A meme Telegram can't fetch any more (deleted on Reddit): forget it and who had it."""
-        await self._conn.execute("DELETE FROM toad_days WHERE meme_id = ?", (meme_id,))
-        await self._conn.execute("DELETE FROM toad_posts WHERE meme_id = ?", (meme_id,))
-        await self._conn.execute("DELETE FROM toad_memes WHERE id = ?", (meme_id,))
-        await self._conn.commit()
-
-    async def _one_toad(self, query: str, args: Sequence[object]) -> ToadMeme | None:
-        async with self._conn.execute(query, args) as cur:
+    async def get_value(self, key: str) -> str | None:
+        async with self._conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)) as cur:
             row = await cur.fetchone()
-        return ToadMeme(*row) if row else None
+        return str(row[0]) if row else None
+
+    async def set_value(self, key: str, value: str) -> None:
+        await self._conn.execute(
+            "INSERT INTO bot_state (key, value) VALUES (?, ?)"
+            " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await self._conn.commit()
 
     async def _one_user(self, query: str, args: Sequence[object]) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:

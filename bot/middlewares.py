@@ -7,6 +7,7 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Chat, Message, TelegramObject, User
 
+from bot import achievements
 from bot.app import App
 from bot.utils import GROUP_TYPES
 
@@ -16,7 +17,7 @@ type Handler = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
 
 class WhitelistMiddleware(BaseMiddleware):
-    """Drops updates from anything but allowed groups and admins' DMs. Leaves foreign groups."""
+    """Only our groups and admins' DMs get through. From any other group the bot just leaves."""
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         app: App = data["app"]
@@ -37,20 +38,21 @@ class WhitelistMiddleware(BaseMiddleware):
 
 
 class TrackUsersMiddleware(BaseMiddleware):
-    """Remembers everyone who writes: the Bot API can't list group members, /all needs them."""
+    # bots can't get the member list, so /all only knows people who wrote something
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         if isinstance(event, Message) and event.chat.type in GROUP_TYPES:
             user = event.from_user
             if user is not None and not user.is_bot:
                 app: App = data["app"]
-                await app.db.upsert_user(event.chat.id, user.id, user.full_name, user.username)
+                seen = await app.db.upsert_user(event.chat.id, user.id, user.full_name, user.username)
+                if seen is not None:
+                    away = event.date.timestamp() - seen
+                    await achievements.on_return(app, event.chat.id, user.id, user.full_name, away)
         return await handler(event, data)
 
 
 class CommandCooldownMiddleware(BaseMiddleware):
-    """Per-user flood guard for commands, shared by all command routers."""
-
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         if isinstance(event, Message):
             app: App = data["app"]

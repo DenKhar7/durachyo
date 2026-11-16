@@ -1,5 +1,3 @@
-"""What to say once the bot decided to speak: picks a reply mode by context and builds the reply."""
-
 import html
 import random
 from collections.abc import Awaitable, Callable
@@ -45,7 +43,7 @@ class ReplyMode(StrEnum):
     BURST = "burst"
 
 
-# Base share of each mode, tuned on the old bot's chat history. mode_weights() shifts it by context.
+# rough shares taken from how the old sglypa talked in our chat; mode_weights() shifts them
 BASE_WEIGHTS: dict[ReplyMode, int] = {
     ReplyMode.PHRASE: 35,
     ReplyMode.SHORT: 25,
@@ -62,8 +60,6 @@ FALLBACK = (ReplyMode.PHRASE, ReplyMode.MARKOV, ReplyMode.SHORT)
 
 @dataclass(slots=True)
 class Reply:
-    """One outgoing message: HTML text, a sticker, a gif or a rendered photo."""
-
     mode: ReplyMode
     text: str | None = None
     plain: str | None = None  # the text as people see it; remembered so the bot doesn't repeat itself
@@ -78,8 +74,6 @@ class Reply:
 
 @dataclass(slots=True)
 class Turn:
-    """Everything a reply mode looks at."""
-
     message: Message
     text: str
     ctx: Context
@@ -96,7 +90,7 @@ class Turn:
         return self.app.rng
 
     def avoid(self) -> set[str]:
-        """Lines not worth saying now: the bot's own recent ones and the message itself."""
+        # don't repeat ourselves and don't parrot the message we answer
         return {*self.state.recent_bot, self.text.strip().lower()}
 
     def fresh(self, plain: str) -> bool:
@@ -201,7 +195,6 @@ MODES: dict[ReplyMode, ModeFn] = {
 
 
 def mode_weights(ctx: Context, *, photo: bool = False) -> dict[ReplyMode, int]:
-    """How to answer, from what was said. Old phrases and short chat reactions dominate, like the original."""
     w = dict(BASE_WEIGHTS)
     if ctx.media:
         w[ReplyMode.MARKOV] = 5
@@ -249,7 +242,7 @@ async def build_reply(
 
 
 async def _maybe_ping(reply: Reply, message: Message, app: App) -> None:
-    """Sometimes drags someone else into it: «..., Вася, подтверди»."""
+    # «..., Вася, подтверди»
     if reply.mode not in (ReplyMode.PHRASE, ReplyMode.MARKOV):
         return
     if app.rng.random() * 100 >= app.settings.ping_chance:

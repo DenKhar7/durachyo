@@ -19,10 +19,11 @@ def _key(word: str) -> str:
 
 
 class MarkovChain:
-    """Word-level n-gram chain. order = how many previous words define the next one.
+    """Word-level markov chain. order is how many previous words pick the next one.
 
-    mix = chance to jump through a single shared word when the full-order state has only one
-    continuation. That is what splices different messages together on a small corpus.
+    With order 2 and a small chat almost every pair of words has exactly one continuation,
+    so the chain would just replay whole messages. mix is the chance to ignore the pair and
+    continue from the last word alone, which is what glues different messages together.
     """
 
     def __init__(self, order: int = 2, mix: float = 0.5) -> None:
@@ -78,10 +79,10 @@ class MarkovChain:
         allow_copy: bool = True,
         rng: random.Random | None = None,
     ) -> str | None:
-        """Random walk, from seed if given.
+        """Random walk, starting at seed if there is one.
 
-        Prefers results that are not verbatim copies of a stored message; with allow_copy=False
-        never returns one.
+        Tries a few times to get something nobody actually wrote. If that fails, returns
+        a real message anyway, unless allow_copy is off.
         """
         rng = rng or _RNG
         fallback: str | None = None

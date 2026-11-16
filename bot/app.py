@@ -1,4 +1,4 @@
-"""Shared state of the running bot. aiogram injects it into every handler as app."""
+"""Everything handlers need, in one object. aiogram passes it in as `app`."""
 
 import random
 from dataclasses import dataclass, field
@@ -11,8 +11,8 @@ from bot.brain import Brain
 from bot.chains import ChainStore
 from bot.config import Settings
 from bot.db import Database
-from bot.toad import ToadPool
-from bot.utils import Cooldown
+from bot.pinterest import PinterestBoard
+from bot.utils import Cooldown, RateLimit
 
 NICK_COOLDOWN = 30.0
 WHO_COOLDOWN = 3.0
@@ -23,8 +23,11 @@ class Cooldowns:
     reply: Cooldown
     command: Cooldown
     everyone: Cooldown
+    duel: RateLimit
     nick: Cooldown = field(default_factory=lambda: Cooldown(NICK_COOLDOWN))
     who: Cooldown = field(default_factory=lambda: Cooldown(WHO_COOLDOWN))
+    # 15th message within 2 minutes = spammer
+    spam: RateLimit = field(default_factory=lambda: RateLimit(14, 120))
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Self:
@@ -32,6 +35,7 @@ class Cooldowns:
             reply=Cooldown(settings.reply_cooldown),
             command=Cooldown(settings.command_cooldown),
             everyone=Cooldown(settings.all_cooldown),
+            duel=RateLimit(settings.duels_per_minute, 60),
         )
 
 
@@ -45,7 +49,7 @@ class App:
     cooldowns: Cooldowns
     brain: Brain = field(default_factory=Brain)
     rng: random.Random = field(default_factory=random.Random)
-    toads: ToadPool = field(default_factory=ToadPool)
+    pinterest: PinterestBoard | None = None
 
     @classmethod
     def create(cls, settings: Settings, bot: Bot, db: Database, me: User) -> Self:
@@ -56,4 +60,5 @@ class App:
             me=me,
             chains=ChainStore(db, settings.markov_order),
             cooldowns=Cooldowns.from_settings(settings),
+            pinterest=PinterestBoard.from_settings(settings),
         )

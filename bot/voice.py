@@ -36,9 +36,9 @@ def is_laugh(text: str | None, sticker_emoji: str | None = None) -> bool:
 
 
 def casual(text: str, rng: random.Random, *, verbatim: bool = False) -> str:
-    """Chat voice: no trailing period, sometimes lowercase, rare хД or emoji.
+    """Makes a line look typed in a chat: no final dot, sometimes lowercase, rarely хД or an emoji.
 
-    verbatim=True keeps the phrase exactly as people wrote it, only the period goes.
+    verbatim only drops the dot, for phrases that should stay the way people wrote them.
     """
     t = " ".join(text.split())
     if t.endswith(".") and not t.endswith(".."):

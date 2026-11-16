@@ -3,9 +3,10 @@ from bot.markov import MarkovChain
 
 
 class ChainStore:
-    """In-memory chain per chat, loaded from the DB on first use.
+    """One markov chain per chat, kept in memory and built from the db on first use.
 
-    Rebuilt every rebuild_every new messages, so messages trimmed from the DB leave the model too.
+    Old messages get trimmed from the db but can't be removed from a chain,
+    so every rebuild_every new messages the chain is thrown away and built again.
     """
 
     def __init__(self, db: Database, order: int, rebuild_every: int = 500) -> None:

@@ -1,4 +1,4 @@
-"""Breaks the silence: writes into a chat that has been quiet for a few hours."""
+"""If the chat has been dead for a few hours, the bot says something."""
 
 import asyncio
 import html
@@ -20,7 +20,7 @@ PING_CHANCE = 0.4
 
 
 def in_quiet_hours(hour: int, spec: str) -> bool:
-    """spec like "1-10" or "22-8" (over midnight); equal ends switch quiet hours off."""
+    # "1-10", or "22-8" across midnight; "0-0" means no quiet hours
     start, end = (int(x) for x in spec.split("-"))
     if start == end:
         return False
@@ -28,7 +28,6 @@ def in_quiet_hours(hour: int, spec: str) -> bool:
 
 
 async def revive_once(app: App, now: datetime | None = None) -> int:
-    """Writes into every allowed chat that went quiet. Once per silence, never at night."""
     settings = app.settings
     now = now or datetime.now(ZoneInfo(settings.timezone))
     if in_quiet_hours(now.hour, settings.quiet_hours):
@@ -57,6 +56,7 @@ async def _revive_chat(app: App, chat_id: int) -> bool:
         log.warning("revive in %s failed: %s", chat_id, exc)
         return False
     app.brain.spoke(chat_id, text, sent.message_id)
+    app.brain.mark_revived(chat_id)
     return True
 
 
@@ -65,5 +65,5 @@ async def revive_loop(app: App) -> None:
         await asyncio.sleep(CHECK_EVERY)
         try:
             await revive_once(app)
-        except Exception:  # the loop has to outlive any single failure; the traceback is logged
+        except Exception:  # one bad run must not kill the loop
             log.exception("revive failed")

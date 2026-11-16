@@ -1,11 +1,10 @@
-"""Stickers, gifs and photos: remembering them and turning photos into demotivators."""
-
 import asyncio
 import logging
 import random
 from collections.abc import Collection
 from enum import StrEnum
 
+import aiohttp
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message, PhotoSize
@@ -29,7 +28,7 @@ class MediaKind(StrEnum):
 
 
 def best_photo(sizes: list[PhotoSize] | None, max_side: int = MAX_PHOTO_SIDE) -> PhotoSize | None:
-    """Largest size that still fits max_side: Telegram sends every photo in several sizes."""
+    # telegram sends every photo in several sizes, smallest first
     if not sizes:
         return None
     fitting = [p for p in sizes if max(p.width, p.height) <= max_side]
@@ -51,7 +50,7 @@ async def remember_media(db: Database, message: Message) -> None:
 async def download(bot: Bot, file_id: str) -> bytes | None:
     try:
         stream = await bot.download(file_id)
-    except TelegramAPIError as exc:
+    except (TelegramAPIError, aiohttp.ClientError, TimeoutError) as exc:
         log.warning("download %s failed: %s", file_id, exc)
         return None
     return stream.read() if stream else None
@@ -69,7 +68,10 @@ async def chat_demotivator(
     title: str | None = None,
     avoid: Collection[str] = frozenset(),
 ) -> bytes | None:
-    """Demotivator from a chat photo (the given one or a random remembered one), captioned with chat words."""
+    """Demotivator out of a chat photo with a caption in the chat's own words.
+
+    Without file_id takes a random photo the chat has posted before.
+    """
     file_id = file_id or await db.random_media(chat_id, MediaKind.PHOTO)
     if not file_id:
         return None
@@ -84,7 +86,8 @@ async def chat_demotivator(
     if image is None:
         return None
     try:
+        # pillow is blocking, keep it off the event loop
         return await asyncio.to_thread(make_demotivator, image, title, subtitle)
     except OSError as exc:
-        log.warning("demotivator failed, broken image: %s", exc)
+        log.warning("can't draw a demotivator, broken image? %s", exc)
         return None
