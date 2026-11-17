@@ -10,7 +10,7 @@ from aiogram.types import BotCommand
 from bot.app import App
 from bot.config import Settings
 from bot.db import Database
-from bot.handlers import admin, collect, commands, games
+from bot.handlers import admin, collect, commands, fun, games
 from bot.middlewares import TrackUsersMiddleware, WhitelistMiddleware
 from bot.revive import revive_loop
 
@@ -21,19 +21,23 @@ COMMANDS = [
     BotCommand(command="demotiv", description="Демотиватор"),
     BotCommand(command="duel", description="Дуэль на d20"),
     BotCommand(command="top", description="Топ дуэлянтов"),
+    BotCommand(command="stats", description="Моя статистика дуэлей"),
     BotCommand(command="ach", description="Мои ачивки"),
+    BotCommand(command="quiz", description="Кто это сказал?"),
+    BotCommand(command="loser", description="Лох дня"),
+    BotCommand(command="horoscope", description="Гороскоп на сегодня"),
     BotCommand(command="all", description="Пингануть всех"),
     BotCommand(command="forgetme", description="Забыть мои сообщения"),
     BotCommand(command="help", description="Помощь"),
 ]
-ALLOWED_UPDATES = ["message", "my_chat_member"]
+ALLOWED_UPDATES = ["message", "callback_query", "my_chat_member"]
 
 
 def build_dispatcher(app: App) -> Dispatcher:
     dp = Dispatcher(app=app)
     dp.update.outer_middleware(WhitelistMiddleware())
     dp.message.outer_middleware(TrackUsersMiddleware())
-    dp.include_routers(admin.router, commands.router, games.router, collect.router)
+    dp.include_routers(admin.router, commands.router, games.router, fun.router, collect.router)
     return dp
 
 

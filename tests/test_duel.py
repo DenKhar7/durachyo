@@ -1,6 +1,6 @@
 import random
 
-from bot.db import Database
+from bot.db import Database, HeadToHead
 from bot.duel import Fight, fight, fight_line
 from bot.utils import RateLimit
 from tests.helpers import FakeClock
@@ -53,3 +53,16 @@ async def test_duel_stats_and_streaks(db: Database) -> None:
     assert (petya.wins, petya.losses, petya.streak, petya.name) == (1, 3, 0, None)
     assert [d.user_id for d in await db.duel_top(-1)] == [10, 11]
     assert (await db.duelist(-1, 99)).wins == 0
+
+
+async def test_head_to_head_from_both_sides(db: Database) -> None:
+    await db.record_duel(-1, 20, a=20, b=5)
+    await db.record_duel(-1, 20, a=5, b=20)
+    await db.record_duel(-1, 5, a=5, b=20)
+    await db.record_duel(-1, None, a=20, b=5)
+    assert await db.head_to_head(-1, 20, 5) == HeadToHead(2, 1, 1)
+    assert await db.head_to_head(-1, 5, 20) == HeadToHead(1, 2, 1)
+    assert await db.head_to_head(-1, 5, 99) == HeadToHead()
+    assert await db.head_to_head(-2, 5, 20) == HeadToHead()
+    (rival,) = await db.rivals(-1, 5)
+    assert rival.user_id == 20 and rival.score == HeadToHead(1, 2, 1)

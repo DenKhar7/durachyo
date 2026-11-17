@@ -98,6 +98,7 @@ async def test_duel_with_username_records_result(app: App) -> None:
     await games.cmd_duel(cast(Message, message), command("дуэль", "@Petya"), app)
     text = said(message)
     assert "⚔️" in text and "Петя" in text and "Вася" in text and "🎲" in text
+    assert "Встречи:" in text
     a, b = await app.db.duelist(CHAT, 10), await app.db.duelist(CHAT, 11)
     assert a.wins + a.losses == b.wins + b.losses <= 1
 
@@ -134,3 +135,23 @@ async def test_top(app: App) -> None:
     message = fake_message()
     await games.cmd_top(cast(Message, message), app)
     assert "1. Петя - 1-0" in said(message)
+
+
+async def test_stats(app: App) -> None:
+    message = fake_message()
+    await games.cmd_stats(cast(Message, message), app)
+    assert "ни с кем не дрался" in said(message)
+    await app.db.upsert_user(CHAT, 11, "Петя", None)
+    await app.db.upsert_user(CHAT, 12, "Маша", None)
+    for winner in (10, 10, 11):
+        await app.db.record_duel(CHAT, winner, a=10, b=11)
+    await app.db.record_duel(CHAT, 12, a=10, b=12)
+    await app.db.record_duel(CHAT, None, a=12, b=10)
+    message = fake_message()
+    await games.cmd_stats(cast(Message, message), app)
+    text = said(message)
+    assert "Боёв: 5" in text and "побед 2, поражений 2, ничьих 1" in text and "Винрейт: 40%" in text
+    assert "Чаще всего дрался с Петя (2:1)" in text
+    assert (
+        "Любимая груша: Петя (2:1)" in text and "Злой рок: Петя (2:1)" in text
+    ) or "Злой рок: Маша (0:1)" in text

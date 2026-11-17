@@ -6,7 +6,7 @@ from aiogram.types import Message
 
 from bot import achievements
 from bot.app import App
-from bot.db import Duelist, KnownUser
+from bot.db import Duelist, HeadToHead, KnownUser, Rival
 from bot.duel import HOT_STREAK, fight, fight_line
 from bot.handlers.filters import IN_GROUP
 from bot.handlers.targets import target_from_message
@@ -63,7 +63,7 @@ async def cmd_duel(message: Message, command: CommandObject, app: App) -> None:
         "",
         fight_line(result, f"<b>{a_name}</b>", f"<b>{b_name}</b>", app.rng),
         "",
-        f"{a_name}: {_score(a)}  ·  {b_name}: {_score(b)}",
+        _meetings(a_name, b_name, await app.db.head_to_head(chat_id, author.id, opponent.user_id)),
     ]
     hot = a if winner == author.id else b if winner is not None else None
     if hot and hot.streak >= HOT_STREAK:
@@ -71,6 +71,41 @@ async def cmd_duel(message: Message, command: CommandObject, app: App) -> None:
     await message.answer("\n".join(lines))
     await achievements.after_duel(app, chat_id, a, name=author.full_name, roll=result.roll_a)
     await achievements.after_duel(app, chat_id, b, name=opponent.full_name, roll=result.roll_b)
+
+
+@router.message(Command("стата", "статистика", "stats"))
+async def cmd_stats(message: Message, app: App) -> None:
+    """Own duel stats. As a reply - that person's."""
+    author = message.from_user
+    target = target_from_message(message) or (
+        KnownUser(author.id, author.full_name, author.username) if author else None
+    )
+    if target is None:
+        return
+    chat_id = message.chat.id
+    me = await app.db.duelist(chat_id, target.user_id)
+    rivals = await app.db.rivals(chat_id, target.user_id)
+    name = html.escape(target.full_name)
+    if not rivals:
+        await message.answer(f"{name} ещё ни с кем не дрался. /дуэль")
+        return
+    total = sum(r.score.total for r in rivals)
+    draws = sum(r.score.draws for r in rivals)
+    winrate = round(100 * me.wins / total)
+    lines = [
+        f"📊 <b>Дуэли {name}</b>",
+        f"Боёв: {total}  ·  побед {me.wins}, поражений {me.losses}, ничьих {draws}",
+        f"Винрейт: {winrate}%",
+        f"Серия сейчас: {me.streak}  ·  лучшая: {me.best_streak}",
+    ]
+    victim = max(rivals, key=lambda r: (r.score.wins, -r.score.losses))
+    nemesis = max(rivals, key=lambda r: (r.score.losses, -r.score.wins))
+    lines.append(f"Чаще всего дрался с {_rival(rivals[0])}")
+    if victim.score.wins:
+        lines.append(f"Любимая груша: {_rival(victim)}")
+    if nemesis.score.losses:
+        lines.append(f"Злой рок: {_rival(nemesis)}")
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("ачивки", "ачивка", "ach", "achievements"))
@@ -97,6 +132,15 @@ async def cmd_top(message: Message, app: App) -> None:
         for place, d in enumerate(top, 1)
     ]
     await message.answer("🏆 <b>Топ дуэлянтов</b>\n" + "\n".join(rows))
+
+
+def _meetings(a: str, b: str, score: HeadToHead) -> str:
+    draws = f", ничьих {score.draws}" if score.draws else ""
+    return f"Встречи: {a} {score.wins} : {score.losses} {b}{draws}"
+
+
+def _rival(r: Rival) -> str:
+    return f"{html.escape(r.name or 'безымянный')} ({r.score.wins}:{r.score.losses})"
 
 
 def _score(d: Duelist) -> str:

@@ -25,6 +25,7 @@ Python 3.12, aiogram 3, SQLite (aiosqlite), Pillow. Деплой: push в master
 - `bot/markov.py` + `bot/chains.py` - генерация текста; `bot/db.py` - SQLite
 - `bot/nicknames.py` - подколы про своих и `/tag`; `bot/voice.py` - стиль речи; `bot/taunts.py` - шаблоны
 - `bot/revive.py` - будит заглохший чат
+- `bot/daily.py` + `bot/handlers/fun.py` - лох дня, гороскоп, «кто это сказал» (кнопки, callback_query)
 - `bot/achievements.py` - ачивки: счётчики на каждое сообщение + после дуэлей
 - `bot/duel.py` + `bot/handlers/games.py` - дуэли и `/топ`; `bot/handlers/targets.py` - «с кем» по реплаю/упоминанию
 - `tests/` - фикстуры `db`, `app`, `bot` в `conftest.py`, хелперы в `helpers.py`; async-тесты пишутся как обычные `async def`

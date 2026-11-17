@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import aiosqlite
@@ -75,6 +76,26 @@ CREATE TABLE IF NOT EXISTS duel_stats (
     PRIMARY KEY (chat_id, user_id)
 );
 
+-- head-to-head score of every pair; low_id < high_id so a pair has one row
+CREATE TABLE IF NOT EXISTS duel_pairs (
+    chat_id   INTEGER NOT NULL,
+    low_id    INTEGER NOT NULL,
+    high_id   INTEGER NOT NULL,
+    low_wins  INTEGER NOT NULL DEFAULT 0,
+    high_wins INTEGER NOT NULL DEFAULT 0,
+    draws     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, low_id, high_id)
+);
+
+-- things picked once a day: loser of the day, horoscopes
+CREATE TABLE IF NOT EXISTS daily_picks (
+    chat_id INTEGER NOT NULL,
+    day     TEXT    NOT NULL,
+    kind    TEXT    NOT NULL,
+    value   TEXT    NOT NULL,
+    PRIMARY KEY (chat_id, day, kind)
+);
+
 CREATE TABLE IF NOT EXISTS achievements (
     chat_id     INTEGER NOT NULL,
     user_id     INTEGER NOT NULL,
@@ -132,6 +153,40 @@ class Duelist:
 
 _DUELIST = """SELECT d.user_id, u.full_name, d.wins, d.losses, d.streak, d.best_streak
 FROM duel_stats d LEFT JOIN users u ON u.chat_id = d.chat_id AND u.user_id = d.user_id"""
+
+
+@dataclass(frozen=True, slots=True)
+class HeadToHead:
+    """Score between two people, from the side of the one who asked."""
+
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.wins + self.losses + self.draws
+
+
+@dataclass(frozen=True, slots=True)
+class Rival:
+    user_id: int
+    name: str | None
+    score: HeadToHead
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    user_id: int
+    text: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Ranked:
+    user_id: int
+    name: str | None
+    value: int
 
 
 class Database:
@@ -362,7 +417,47 @@ class Database:
                     "UPDATE duel_stats SET losses = losses + 1, streak = 0 WHERE chat_id = ? AND user_id = ?"
                 )
             await self._conn.execute(query, (chat_id, user_id))
+        low, high = sorted((a, b))
+        column = "draws" if winner is None else "low_wins" if winner == low else "high_wins"
+        await self._conn.execute(
+            f"""INSERT INTO duel_pairs (chat_id, low_id, high_id, {column}) VALUES (?, ?, ?, 1)
+                ON CONFLICT (chat_id, low_id, high_id) DO UPDATE SET {column} = {column} + 1""",  # noqa: S608
+            (chat_id, low, high),
+        )
         await self._conn.commit()
+
+    async def head_to_head(self, chat_id: int, me: int, other: int) -> HeadToHead:
+        low, high = sorted((me, other))
+        async with self._conn.execute(
+            "SELECT low_wins, high_wins, draws FROM duel_pairs"
+            " WHERE chat_id = ? AND low_id = ? AND high_id = ?",
+            (chat_id, low, high),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return HeadToHead()
+        low_wins, high_wins, draws = row
+        return HeadToHead(low_wins, high_wins, draws) if me == low else HeadToHead(high_wins, low_wins, draws)
+
+    async def rivals(self, chat_id: int, me: int) -> list[Rival]:
+        """Everyone this person fought, most fights first."""
+        async with self._conn.execute(
+            """SELECT p.low_id, p.high_id, p.low_wins, p.high_wins, p.draws, u.full_name
+               FROM duel_pairs p
+               LEFT JOIN users u ON u.chat_id = p.chat_id
+                    AND u.user_id = CASE WHEN p.low_id = ? THEN p.high_id ELSE p.low_id END
+               WHERE p.chat_id = ? AND ? IN (p.low_id, p.high_id)
+               ORDER BY p.low_wins + p.high_wins + p.draws DESC""",
+            (me, chat_id, me),
+        ) as cur:
+            rows = await cur.fetchall()
+        rivals = []
+        for low, high, low_wins, high_wins, draws, name in rows:
+            if me == low:
+                rivals.append(Rival(high, name, HeadToHead(low_wins, high_wins, draws)))
+            else:
+                rivals.append(Rival(low, name, HeadToHead(high_wins, low_wins, draws)))
+        return rivals
 
     async def duelist(self, chat_id: int, user_id: int) -> Duelist:
         async with self._conn.execute(
@@ -405,6 +500,48 @@ class Database:
             row = await cur.fetchone()
         await self._conn.commit()
         return int(row[0]) if row else 0
+
+    async def daily_pick(self, chat_id: int, day: date, kind: str) -> str | None:
+        async with self._conn.execute(
+            "SELECT value FROM daily_picks WHERE chat_id = ? AND day = ? AND kind = ?",
+            (chat_id, day.isoformat(), kind),
+        ) as cur:
+            row = await cur.fetchone()
+        return str(row[0]) if row else None
+
+    async def set_daily_pick(self, chat_id: int, day: date, kind: str, value: str) -> str:
+        """Saves the pick unless one is already there. Returns whatever is stored, so two
+        people hitting the command at once still see the same pick."""
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO daily_picks (chat_id, day, kind, value) VALUES (?, ?, ?, ?)",
+            (chat_id, day.isoformat(), kind, value),
+        )
+        week_ago = date.fromordinal(day.toordinal() - 7).isoformat()
+        await self._conn.execute("DELETE FROM daily_picks WHERE day < ?", (week_ago,))
+        await self._conn.commit()
+        return await self.daily_pick(chat_id, day, kind) or value
+
+    async def random_quote(self, chat_id: int, min_words: int = 3) -> Quote | None:
+        """A message of someone the bot still knows, long enough to be recognisable."""
+        async with self._conn.execute(
+            f"""SELECT m.user_id, m.text, u.full_name FROM messages m
+                JOIN users u ON u.chat_id = m.chat_id AND u.user_id = m.user_id
+                WHERE m.chat_id = ? AND {_SPACES} >= ? AND length(m.text) <= 200
+                ORDER BY RANDOM() LIMIT 1""",  # noqa: S608
+            (chat_id, min_words - 1),
+        ) as cur:
+            row = await cur.fetchone()
+        return Quote(*row) if row else None
+
+    async def counter_top(self, chat_id: int, key: str, limit: int = 10) -> list[Ranked]:
+        async with self._conn.execute(
+            """SELECT c.user_id, u.full_name, c.value FROM counters c
+               LEFT JOIN users u ON u.chat_id = c.chat_id AND u.user_id = c.user_id
+               WHERE c.chat_id = ? AND c.key = ? AND c.value > 0
+               ORDER BY c.value DESC LIMIT ?""",
+            (chat_id, key, limit),
+        ) as cur:
+            return [Ranked(*row) for row in await cur.fetchall()]
 
     async def _one_user(self, query: str, args: Sequence[object]) -> KnownUser | None:
         async with self._conn.execute(query, args) as cur:

@@ -10,6 +10,7 @@ from aiogram.types import User
 from bot.brain import Brain
 from bot.chains import ChainStore
 from bot.config import Settings
+from bot.daily import Quiz
 from bot.db import Database
 from bot.utils import Cooldown, RateLimit
 
@@ -48,6 +49,8 @@ class App:
     cooldowns: Cooldowns
     brain: Brain = field(default_factory=Brain)
     rng: random.Random = field(default_factory=random.Random)
+    # open «кто это сказал» quizzes by (chat_id, message_id); lost on restart, that's fine
+    quizzes: dict[tuple[int, int], Quiz] = field(default_factory=dict)
 
     @classmethod
     def create(cls, settings: Settings, bot: Bot, db: Database, me: User) -> Self:
