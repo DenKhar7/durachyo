@@ -7,7 +7,7 @@ import pytest
 from aiogram.filters import CommandObject
 from aiogram.types import CallbackQuery, Message
 
-from bot import daily
+from bot import achievements, daily
 from bot.app import App
 from bot.db import Database
 from bot.handlers import fun
@@ -92,9 +92,6 @@ async def test_quiz_round(app: App) -> None:
     assert sorted(buttons) == ["quiz:10", "quiz:11", "quiz:12"]
 
     key = (CHAT, 77)
-    author = answer_query(app, 11, 11)
-    await fun.on_quiz_answer(cast(CallbackQuery, author), app)
-    assert 11 not in app.quizzes[key].guessed  # the author can't play
     wrong = answer_query(app, 10, 12)
     await fun.on_quiz_answer(cast(CallbackQuery, wrong), app)
     assert 10 in app.quizzes[key].guessed
@@ -109,3 +106,27 @@ async def test_quiz_round(app: App) -> None:
     await fun.on_quiz_answer(cast(CallbackQuery, late), app)
     late.answer.assert_awaited_once()
     assert [(r.user_id, r.value) for r in await app.db.counter_top(CHAT, fun.QUIZ_KEY)] == [(12, 1)]
+
+
+async def test_author_can_guess_own_phrase(app: App) -> None:
+    await crowd(app)
+    await app.db.add_message(CHAT, 11, "я пью пиво дома", keep=100)
+    message = fake_message()
+    message.answer.return_value = SimpleNamespace(message_id=77)
+    await fun.cmd_quiz(cast(Message, message), command("ктосказал"), app)
+    author = answer_query(app, 11, 11)
+    await fun.on_quiz_answer(cast(CallbackQuery, author), app)
+    assert (CHAT, 77) not in app.quizzes
+    assert [(r.user_id, r.value) for r in await app.db.counter_top(CHAT, fun.QUIZ_KEY)] == [(11, 1)]
+
+
+async def test_game_achievements(app: App) -> None:
+    await crowd(app)
+    message = fake_message()
+    await fun.cmd_loser(cast(Message, message), command("лох"), app)
+    loser = int(await app.db.daily_pick(CHAT, fun._today(app), "loser") or 0)
+    assert "loser" in await app.db.achievements(CHAT, loser)
+    for _ in range(9):
+        await app.db.bump_counter(CHAT, 10, fun.QUIZ_KEY)
+    await achievements.progress(app, CHAT, 10, "Вася", fun.QUIZ_KEY)
+    assert "detective" in await app.db.achievements(CHAT, 10)

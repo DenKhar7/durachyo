@@ -46,6 +46,11 @@ ALL = (
     Achievement("immortal", "🍀", "Лакер", "5 побед подряд"),
     Achievement("punching_bag", "🥊", "Груша для битья", "10 поражений в дуэлях"),
     Achievement("crit", "🎯", "Лакер", "выбросил 20 в дуэли"),
+    Achievement("detective", "🕵", "Детектив", "угадал автора 10 раз", "quiz_points", 10),
+    Achievement("sherlock", "🔎", "Шерлок", "угадал автора 50 раз", "quiz_points", 50),
+    Achievement("loser", "🤡", "Крещение", "впервые стал лохом дня", "loser_days", 1),
+    Achievement("born_loser", "🪦", "Прирождённый лох", "был лохом дня 5 раз", "loser_days", 5),
+    Achievement("astrologer", "🔮", "Астролог", "смотрел гороскоп 10 дней,красава", "horoscopes", 10),
     Achievement("fumble", "🤦", "Анлакер", "выбросил 1 в дуэли"),
 )
 BY_CODE = {a.code: a for a in ALL}
@@ -64,11 +69,12 @@ async def unlock(app: App, chat_id: int, user_id: int, name: str | None, code: s
     return True
 
 
-async def progress(app: App, chat_id: int, user_id: int, name: str | None, counter: str) -> None:
+async def progress(app: App, chat_id: int, user_id: int, name: str | None, counter: str) -> int:
     value = await app.db.bump_counter(chat_id, user_id, counter)
     for a in ALL:
         if a.counter == counter and value >= a.goal:
             await unlock(app, chat_id, user_id, name, a.code)
+    return value
 
 
 async def on_message(app: App, message: Message, *, text: str, called: bool, laughed_at: int | None) -> None:

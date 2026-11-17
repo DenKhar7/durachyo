@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from bot import daily
+from bot import achievements, daily
 from bot.app import App
 from bot.daily import Quiz
 from bot.db import KnownUser
@@ -72,12 +72,12 @@ async def cmd_loser(message: Message, command: CommandObject, app: App) -> None:
     stored = await app.db.set_daily_pick(chat_id, today, "loser", str(loser.user_id))
     if int(stored) != loser.user_id:  # someone was faster
         return
-    await app.db.bump_counter(chat_id, loser.user_id, LOSER_KEY)
     for line in daily.LOSER_DRAMA:
         await message.answer(line)
         await asyncio.sleep(DRAMA_PAUSE)
     name = mention(loser.user_id, loser.full_name)
     await message.answer(app.rng.choice(daily.LOSER_LINES).format(name=name))
+    await achievements.progress(app, chat_id, loser.user_id, loser.full_name, LOSER_KEY)
 
 
 # ---------- гороскоп ----------
@@ -92,6 +92,7 @@ async def cmd_horoscope(message: Message, app: App) -> None:
     kind = f"horo:{user.id}"
     text = await app.db.daily_pick(chat_id, today, kind)
     if text is None:
+        await achievements.progress(app, chat_id, user.id, user.full_name, "horoscopes")
         text = await app.db.set_daily_pick(
             chat_id, today, kind, await _make_horoscope(app, chat_id, user.id, today)
         )
@@ -156,9 +157,6 @@ async def on_quiz_answer(query: CallbackQuery, app: App) -> None:
     if quiz is None:
         await query.answer("Эта викторина уже закончилась")
         return
-    if user.id == quiz.author_id:
-        await query.answer("НЕ ПОДСКАЗЫВАЙ", show_alert=True)
-        return
     if user.id in quiz.guessed:
         await query.answer("Ты уже ответил")
         return
@@ -167,7 +165,7 @@ async def on_quiz_answer(query: CallbackQuery, app: App) -> None:
         await query.answer("Мимо 🤡", show_alert=True)
         return
     app.quizzes.pop(key, None)
-    points = await app.db.bump_counter(message.chat.id, user.id, QUIZ_KEY)
+    points = await achievements.progress(app, message.chat.id, user.id, user.full_name, QUIZ_KEY)
     await query.answer("ВЕРНО!")
     with suppress(TelegramAPIError):
         await message.edit_text(
