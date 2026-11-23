@@ -67,13 +67,3 @@ async def test_media_and_hits(db: Database) -> None:
     for text in ("normalno", "normalno", "го"):
         await db.add_hit(-1, text)
     assert await db.hits(-1) == [("normalno", 2), ("го", 1)]
-
-
-async def test_forget_user(db: Database) -> None:
-    await db.upsert_user(-1, 10, "Вася", None)
-    await db.add_message(-1, 10, "a", keep=100)
-    await db.add_message(-1, 11, "b", keep=100)
-    assert await db.forget_user(-1, 10) == 1
-    assert await db.texts(-1) == ["b"]
-    assert await db.get_user(-1, 10) is None
-    assert await db.stats(-1) == (1, 0)

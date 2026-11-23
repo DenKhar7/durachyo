@@ -84,14 +84,6 @@ async def test_all_pings_everyone_but_caller_and_has_cooldown(app: App) -> None:
     assert "Не спамь" in said(again)
 
 
-async def test_forgetme(app: App) -> None:
-    await app.db.add_message(CHAT, 10, "секрет", keep=100)
-    message = fake_message(user_id=10)
-    await commands.cmd_forgetme(cast(Message, message), app)
-    assert await app.db.texts(CHAT) == []
-    assert "Забыл 1" in said(message)
-
-
 async def test_duel_with_username_records_result(app: App) -> None:
     await app.db.upsert_user(CHAT, 11, "Петя", "petya")
     message = fake_message()

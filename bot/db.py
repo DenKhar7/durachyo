@@ -363,15 +363,6 @@ class Database:
         )
         await self._conn.commit()
 
-    async def forget_user(self, chat_id: int, user_id: int) -> int:
-        cur = await self._conn.execute(
-            "DELETE FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id)
-        )
-        deleted = cur.rowcount
-        await self._conn.execute("DELETE FROM users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-        await self._conn.commit()
-        return deleted
-
     async def stats(self, chat_id: int) -> tuple[int, int]:
         async with self._conn.execute(
             """SELECT (SELECT COUNT(*) FROM messages WHERE chat_id = ?),

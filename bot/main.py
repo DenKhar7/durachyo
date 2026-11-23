@@ -27,7 +27,6 @@ COMMANDS = [
     BotCommand(command="loser", description="Лох дня"),
     BotCommand(command="horoscope", description="Гороскоп на сегодня"),
     BotCommand(command="all", description="Пингануть всех"),
-    BotCommand(command="forgetme", description="Забыть мои сообщения"),
     BotCommand(command="help", description="Помощь"),
 ]
 ALLOWED_UPDATES = ["message", "callback_query", "my_chat_member"]

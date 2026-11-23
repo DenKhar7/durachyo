@@ -35,8 +35,7 @@ HELP = (
     "/лох - лох дня (/лох топ - рейтинг)\n"
     "/гороскоп - твой гороскоп на сегодня\n"
     "@бот кто насрал? - узнать правду\n"
-    "/all - пингануть всех\n"
-    "/forgetme - стереть мои сообщения из памяти\n\n"
+    "/all - пингануть всех\n\n"
     "Админ: /chance N (болтливость), /tag Имя ярлык, /untag Имя, /tags"
 )
 
@@ -110,12 +109,3 @@ async def cmd_all(message: Message, app: App) -> None:
     for i, part in enumerate(chunks(users, MENTIONS_PER_MESSAGE)):
         prefix = "Общий сбор! " if i == 0 else ""
         await message.answer(prefix + " ".join(mention(u.user_id, u.full_name) for u in part))
-
-
-@router.message(Command("forgetme"), IN_GROUP)
-async def cmd_forgetme(message: Message, app: App) -> None:
-    if message.from_user is None:
-        return
-    deleted = await app.db.forget_user(message.chat.id, message.from_user.id)
-    app.chains.invalidate(message.chat.id)
-    await message.reply(f"Забыл {deleted} твоих фраз. Но осадочек остался.")
