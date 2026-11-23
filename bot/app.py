@@ -2,10 +2,9 @@
 
 import random
 from dataclasses import dataclass, field
-from typing import Self
+from typing import Protocol, Self
 
 from aiogram import Bot
-from aiogram.types import User
 
 from bot.brain import Brain
 from bot.chains import ChainStore
@@ -15,6 +14,18 @@ from bot.db import Database
 from bot.utils import Cooldown, RateLimit
 
 NICK_COOLDOWN = 30.0
+
+
+class BotIdentity(Protocol):
+    """The bot's own id/username. get_me() returns User, or BotFullInfo on newer aiogram."""
+
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def username(self) -> str | None: ...
+
+
 WHO_COOLDOWN = 3.0
 
 
@@ -44,7 +55,7 @@ class App:
     settings: Settings
     bot: Bot
     db: Database
-    me: User
+    me: BotIdentity
     chains: ChainStore
     cooldowns: Cooldowns
     brain: Brain = field(default_factory=Brain)
@@ -53,7 +64,7 @@ class App:
     quizzes: dict[tuple[int, int], Quiz] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, settings: Settings, bot: Bot, db: Database, me: User) -> Self:
+    def create(cls, settings: Settings, bot: Bot, db: Database, me: BotIdentity) -> Self:
         return cls(
             settings=settings,
             bot=bot,
